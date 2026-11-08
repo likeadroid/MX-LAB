@@ -347,9 +347,19 @@ fn table_char_width(ctx: &egui::Context) -> f32 {
     })
 }
 
-/// Où commencent les mesures de loudness dans une ligne du tableau.
+/// Où commencent les mesures de loudness : calées à droite s'il y a la place. Sinon elles
+/// passent après le texte et sortent par la droite : ce sont elles qui cèdent.
 fn loudness_left(rect: egui::Rect, char_width: f32) -> f32 {
-    rect.right() - TABLE_PADDING - LOUDNESS_CHARS as f32 * char_width
+    let text_end = rect.left()
+        + TABLE_PADDING
+        + FIXED_CHARS as f32 * char_width
+        + TABLE_NOTE_GAP
+        + TABLE_MOOD_WIDTH
+        + TABLE_ENSEMBLES_WIDTH
+        + TABLE_INSTRUMENTS_WIDTH
+        + TABLE_TEXT_MIN_WIDTH
+        + TABLE_NOTE_GAP;
+    (rect.right() - TABLE_PADDING - LOUDNESS_CHARS as f32 * char_width).max(text_end)
 }
 
 /// La place de chaque colonne dans une ligne du tableau.
@@ -366,18 +376,16 @@ fn table_cells(rect: egui::Rect, char_width: f32) -> Vec<(Column, egui::Rect)> {
     cells.extend(LOUDNESS_CELLS.iter().map(|&(column, first, last)| {
         (column, cell(loudness_left + first as f32 * char_width, loudness_left + last as f32 * char_width))
     }));
-    // Un panneau étroit rogne les colonnes de texte, jamais les mesures
-    let limit = loudness_left - TABLE_NOTE_GAP;
-    let mut x = (base + FIXED_CHARS as f32 * char_width + TABLE_NOTE_GAP).min(limit);
+    let mut x = base + FIXED_CHARS as f32 * char_width + TABLE_NOTE_GAP;
     for (column, width) in [
         (Column::Mood, TABLE_MOOD_WIDTH),
         (Column::Ensembles, TABLE_ENSEMBLES_WIDTH),
         (Column::Instruments, TABLE_INSTRUMENTS_WIDTH),
     ] {
-        cells.push((column, cell(x, (x + width - 6.0).min(limit))));
-        x = (x + width).min(limit);
+        cells.push((column, cell(x, x + width - 6.0)));
+        x += width;
     }
-    let (name, note) = text_column_widths(limit - x);
+    let (name, note) = text_column_widths(loudness_left - TABLE_NOTE_GAP - x);
     cells.push((Column::Name, cell(x, x + name)));
     cells.push((Column::Note, cell(x + name + TABLE_NOTE_GAP, x + name + TABLE_NOTE_GAP + note)));
     cells
@@ -430,6 +438,8 @@ fn loudness_columns(measure: Option<&signals::Measure>, overrides: &BTreeMap<Str
 const TABLE_MOOD_WIDTH: f32 = 62.0;
 const TABLE_ENSEMBLES_WIDTH: f32 = 112.0;
 const TABLE_INSTRUMENTS_WIDTH: f32 = 150.0;
+/// Place gardée au nom et à la note avant de laisser celle des mesures.
+const TABLE_TEXT_MIN_WIDTH: f32 = 240.0;
 
 fn loudness_header(tp: &str, i: &str, s: &str, m: &str, lra: &str) -> String {
     format!("{tp:>5} {i:>5} {s:>5} {m:>5} {lra:>5}")
@@ -3566,10 +3576,12 @@ mod tests {
         assert_eq!(cell(wide, Column::Range).right(), 1400.0 - TABLE_PADDING);
         assert!(cell(wide, Column::Note).right() <= cell(wide, Column::TruePeak).left());
         assert!(cell(wide, Column::Instruments).right() <= cell(wide, Column::Name).left());
-        // Panneau étroit : le texte se rogne, les mesures ne bougent pas du bord
+        // Panneau étroit : le texte garde sa place, les mesures sortent par la droite
         let narrow = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(620.0, 18.0));
-        assert_eq!(cell(narrow, Column::Range).right(), 620.0 - TABLE_PADDING);
-        assert!(cell(narrow, Column::Instruments).right() <= cell(narrow, Column::TruePeak).left());
+        assert!(cell(narrow, Column::Range).right() > 620.0);
+        assert_eq!(cell(narrow, Column::Instruments).width(), TABLE_INSTRUMENTS_WIDTH - 6.0);
+        assert!(cell(narrow, Column::Name).width() > 80.0 && cell(narrow, Column::Note).width() > 100.0);
+        assert!(cell(narrow, Column::Note).right() <= cell(narrow, Column::TruePeak).left());
     }
 
     /// Double-clic dans une colonne de la ligne voulue, puis frappe au clavier.
