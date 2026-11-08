@@ -203,6 +203,8 @@ pub struct App {
     /// Hauteur laissée sous le tableau, une fois réglée à la main.
     sheet_height: Option<f32>,
     sheet_height_now: f32,
+    /// Ce que la fiche occupe vraiment : sans séquence choisie, puis avec.
+    sheet_measured: [f32; 2],
     /// Le champ de la fiche de séquence en cours de saisie.
     field_edit: Option<TableEdit>,
     /// Début ou fin en train d'être glissé : colonne, valeur de départ, décalage en secondes.
@@ -294,6 +296,7 @@ const LOUDNESS_CHARS: usize = 29;
 const TABLE_EDIT_MIN_WIDTH: f32 = 96.0;
 /// Hauteur minimale sous le tableau : les boutons d'export restent visibles.
 const MIN_SHEET_HEIGHT: f32 = 50.0;
+const SHEET_BOTTOM_MARGIN: f32 = 6.0;
 const TABLE_OVERRIDE_COLOR: Color32 = Color32::from_rgb(245, 190, 90);
 
 /// Ce qu'on voulait faire quand des modifications n'étaient pas enregistrées.
@@ -568,6 +571,7 @@ impl App {
             field_edit: None,
             sheet_height: None,
             sheet_height_now: 70.0,
+            sheet_measured: [70.0, 175.0],
             bound_drag: None,
             after_save_prompt: None,
             allow_close: false,
@@ -1879,9 +1883,12 @@ impl App {
             return;
         }
         self.sequence_list(ui);
+        let top = ui.cursor().top();
         self.export_row(ui, ctx);
         self.table_splitter(ui);
         self.selected_section(ui);
+        // Le tableau prendra tout le reste à l'image suivante : pas de vide sous la fiche
+        self.sheet_measured[self.selected.is_some() as usize] = ui.cursor().top() - top + SHEET_BOTTOM_MARGIN;
     }
 
     fn film_section(&mut self, ui: &mut egui::Ui) {
@@ -2035,7 +2042,7 @@ impl App {
         let scroll = std::mem::take(&mut self.scroll_list);
         let selected = self.selected;
         // La liste prend tout ce que la fiche de la séquence choisie laisse libre
-        let reserved = self.sheet_height.unwrap_or(if selected.is_some() { 175.0 } else { 70.0 });
+        let reserved = self.sheet_height.unwrap_or(self.sheet_measured[selected.is_some() as usize]);
         self.sheet_height_now = reserved;
         let room = (ui.available_height() - reserved).max(90.0);
         egui::ScrollArea::vertical().id_salt("sequence-list").max_height(room).auto_shrink([false, false]).show(ui, |ui| {
@@ -3020,6 +3027,22 @@ mod tests {
         harness.step();
         harness.step();
         assert_eq!(first_segment(&harness).start, 70.0);
+    }
+
+    #[test]
+    fn sheet_takes_only_the_height_it_needs_by_default() {
+        let mut app = app();
+        app.selected = app.media.as_ref().unwrap().project.segments.first().map(|s| s.id);
+        let mut harness = wide_harness(app);
+        for _ in 0..4 {
+            harness.step();
+        }
+        let reserved = harness.state().sheet_height_now;
+        let splitter = harness.get_by_label("Partage tableau et fiche").rect().top();
+        let notes = harness.query_all_by_label("Notes").map(|node| node.rect().bottom()).fold(0.0, f32::max);
+        let below_splitter = notes - splitter;
+        assert!(reserved >= below_splitter, "la fiche tient : {reserved} {below_splitter}");
+        assert!(reserved - below_splitter < 50.0, "pas de grand vide : {reserved} {below_splitter}");
     }
 
     #[test]
