@@ -162,13 +162,24 @@ impl Project {
     }
 
     /// Remplace les séquences détectées, sans toucher à ce qui a été retouché ou ajouté.
+    /// Une séquence qui recouvre une ancienne en reprend l'identité : la détection progresse
+    /// sans faire perdre la sélection ni ce qui a déjà été saisi.
     pub fn apply_detection(&mut self, detected: &[(f64, f64)]) {
-        self.segments.retain(|s| s.origin != Origin::Detected);
+        let (mut previous, kept): (Vec<Segment>, Vec<Segment>) =
+            std::mem::take(&mut self.segments).into_iter().partition(|s| s.origin == Origin::Detected);
+        self.segments = kept;
         for &(start, end) in detected {
             let free = !self.segments.iter().any(|s| s.origin != Origin::Detected && start < s.end && s.start < end);
             if free {
-                let id = self.new_id();
-                self.segments.push(Segment { id, start, end, origin: Origin::Detected, ..Default::default() });
+                let overlap = |s: &Segment| end.min(s.end) - start.max(s.start);
+                let closest = (0..previous.len())
+                    .filter(|&index| overlap(&previous[index]) > 0.0)
+                    .max_by(|&a, &b| overlap(&previous[a]).total_cmp(&overlap(&previous[b])));
+                let segment = match closest {
+                    Some(index) => Segment { start, end, ..previous.swap_remove(index) },
+                    None => Segment { id: self.new_id(), start, end, origin: Origin::Detected, ..Default::default() },
+                };
+                self.segments.push(segment);
             }
         }
         self.segments.sort_by(|a, b| a.start.total_cmp(&b.start));
@@ -363,6 +374,20 @@ mod tests {
         let last = project.segments[2].id;
         project.set_end(last, 500.0);
         assert_eq!(project.segment(last).unwrap().end, 100.0);
+    }
+
+    #[test]
+    fn a_growing_detection_keeps_the_identity_of_its_sequences() {
+        let mut project = Project::default();
+        project.apply_detection(&[(10.0, 20.0), (40.0, 50.0)]);
+        let (first, second) = (project.segments[0].id, project.segments[1].id);
+        project.segment_mut(second).unwrap().notes = "Thème".into();
+        project.apply_detection(&[(10.0, 25.0), (40.0, 52.0), (80.0, 90.0)]);
+        assert_eq!(project.segments[0].id, first);
+        assert_eq!(project.segments[1].id, second);
+        assert_eq!(project.segments[1].end, 52.0);
+        assert_eq!(project.segments[1].notes, "Thème");
+        assert!(project.segments[2].id != first && project.segments[2].id != second);
     }
 
     #[test]

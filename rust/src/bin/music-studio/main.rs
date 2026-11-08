@@ -525,6 +525,16 @@ fn paint_table_row(
     }
 }
 
+/// Applique une détection sans perdre la séquence choisie : si elle a fusionné avec une
+/// voisine, la sélection passe à celle qui recouvre désormais son milieu.
+fn apply_detection_keeping_selection(project: &mut Project, selected: &mut Option<u64>, detected: &[(f64, f64)]) {
+    let middle = selected.and_then(|id| project.segment(id)).map(|s| (s.start + s.end) / 2.0);
+    project.apply_detection(detected);
+    if !project.segments.iter().any(|s| Some(s.id) == *selected) {
+        *selected = middle.and_then(|time| project.segments.iter().find(|s| s.start <= time && time < s.end)).map(|s| s.id);
+    }
+}
+
 fn is_video(path: &Path) -> bool {
     path.extension()
         .map(|e| e.to_string_lossy().to_lowercase())
@@ -1182,11 +1192,8 @@ impl App {
             settings.post,
             media.project.duration,
         );
-        media.project.apply_detection(&detected);
+        apply_detection_keeping_selection(&mut media.project, &mut self.selected, &detected);
         media.mark_changed();
-        if !media.project.segments.iter().any(|s| Some(s.id) == self.selected) {
-            self.selected = None;
-        }
     }
 
     fn poll_jobs(&mut self, ctx: &egui::Context) {
@@ -1248,10 +1255,7 @@ impl App {
                         settings.post,
                         media.project.duration,
                     );
-                    media.project.apply_detection(&detected);
-                    if !media.project.segments.iter().any(|s| Some(s.id) == self.selected) {
-                        self.selected = None;
-                    }
+                    apply_detection_keeping_selection(&mut media.project, &mut self.selected, &detected);
                 }
                 Job::Detected(Ok(scores)) => {
                     media.detect_progress = None;
@@ -2794,6 +2798,24 @@ mod tests {
         for state in [&widgets.inactive, &widgets.hovered, &widgets.active, &widgets.open] {
             assert_eq!(state.fg_stroke.color, MENU_TEXT);
         }
+    }
+
+    #[test]
+    fn selection_survives_a_detection_in_progress() {
+        let mut project = Project::default();
+        project.apply_detection(&[(10.0, 20.0), (40.0, 50.0)]);
+        let mut selected = Some(project.segments[1].id);
+        let chosen = selected;
+        // La séquence s'allonge : même identité
+        apply_detection_keeping_selection(&mut project, &mut selected, &[(10.0, 20.0), (40.0, 60.0)]);
+        assert_eq!(selected, chosen);
+        // Elle fusionne avec sa voisine : la sélection suit
+        project.segment_mut(project.segments[0].id).unwrap().end = 20.0;
+        apply_detection_keeping_selection(&mut project, &mut selected, &[(5.0, 70.0)]);
+        assert_eq!(selected, Some(project.segments[0].id));
+        // Elle disparaît vraiment : plus rien de choisi
+        apply_detection_keeping_selection(&mut project, &mut selected, &[]);
+        assert_eq!(selected, None);
     }
 
     #[test]
