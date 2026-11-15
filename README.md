@@ -19,8 +19,21 @@ cargo build --release
 
 L'exe est créé dans `target/release/mx-lab.exe`. Pour itérer plus vite : `cargo build --profile studio-dev`.
 
-## Plateformes
-Windows pour l'instant. Les portages macOS et Linux sont prévus.
+## macOS et Linux
+MX-LAB compile et passe ses tests sous macOS et Linux (voir la CI). FFmpeg et libmpv n'y sont pas intégrés à l'exécutable : ils sont cherchés à côté de lui, puis dans Homebrew et le système.
+
+```bash
+# macOS
+brew install ffmpeg mpv
+# Ubuntu / Debian
+sudo apt install ffmpeg libmpv2
+```
+
+```bash
+cargo build --release
+```
+
+La vidéo y passe par le rendu logiciel de mpv. Données locales : `~/Library/Application Support/MX-LAB` (macOS), `~/.local/share/mx-lab` (Linux). Pas encore de paquet `.app` ni d'AppImage.
 
 ## Licence
 GPL-3.0, voir `LICENSE`.
