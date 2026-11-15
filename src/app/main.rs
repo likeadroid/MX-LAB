@@ -2043,30 +2043,21 @@ impl App {
     fn detection_controls(&mut self, ui: &mut egui::Ui) {
         let Some(media) = &self.media else { return };
         let mut settings = media.project.settings.clone();
-        let has_scores = !media.project.scores.is_empty();
+        let enabled = !media.project.scores.is_empty() && !media.project.detection_off;
         let mut changed = false;
         let mut released = false;
-        ui.set_min_width(250.0);
-        ui.add_enabled_ui(has_scores, |ui| {
-            ui.spacing_mut().interact_size = egui::vec2(timeline::VALUE_WIDTH, 18.0);
-            let mut row = |label: &str, help: &str, value: &mut f64, range: std::ops::RangeInclusive<f64>| {
-                ui.horizontal(|ui| {
-                    let label = timeline::left_label(ui, 100.0, RichText::new(label)).on_hover_text(help);
-                    // Mêmes dimensions sur toutes les lignes, quelle que soit la valeur
-                    ui.spacing_mut().slider_width = (ui.available_width() - timeline::VALUE_WIDTH - ui.spacing().item_spacing.x).max(30.0);
-                    let slider = ui.add(egui::Slider::new(value, range.clone()).step_by(1.0).show_value(false));
-                    let drag = egui::DragValue::new(value).range(range).speed(0.25).fixed_decimals(0);
-                    let drag = ui.add_sized([timeline::VALUE_WIDTH, 18.0], drag);
-                    for response in [slider.labelled_by(label.id).on_hover_text(help), drag.labelled_by(label.id).on_hover_text(help)] {
-                        changed |= response.changed();
-                        released |= response.drag_stopped() || (response.changed() && !response.dragged());
-                    }
-                });
-            };
-            row("Gap (s)", GAP_HELP, &mut settings.gap, 1.0..=60.0);
-            row("Anticipation (s)", ANTICIPATION_HELP, &mut settings.anticipation, 0.0..=20.0);
-            row("Post (s)", POST_HELP, &mut settings.post, 0.0..=20.0);
-        });
+        ui.spacing_mut().item_spacing.y = 6.0;
+        let rows: [(&str, &str, &mut f64, std::ops::RangeInclusive<f64>); 3] = [
+            ("Gap (s)", GAP_HELP, &mut settings.gap, 1.0..=60.0),
+            ("Anticipation (s)", ANTICIPATION_HELP, &mut settings.anticipation, 0.0..=20.0),
+            ("Post (s)", POST_HELP, &mut settings.post, 0.0..=20.0),
+        ];
+        for (label, help, value, range) in rows {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(200.0, 28.0), egui::Sense::hover());
+            let response = timeline::slider_box(ui, rect, label, value, range, enabled, help);
+            changed |= response.changed();
+            released |= response.drag_stopped() || response.clicked();
+        }
         self.apply_detection_settings(settings, changed, released);
     }
 
@@ -2897,6 +2888,12 @@ mod tests {
             );
         for _ in 0..4 {
             harness.step();
+        }
+        if std::env::var("MX_LAB_SNAPSHOT_GEAR").is_ok() {
+            harness.get_by_label("Réglages de la détection").click();
+            for _ in 0..3 {
+                harness.step();
+            }
         }
         let path = std::env::var("MX_LAB_SNAPSHOT").unwrap_or_else(|_| "mx-lab-snapshot.png".into());
         harness.render().expect("rendu wgpu").save(&path).expect("écriture de l'image");
@@ -4067,7 +4064,7 @@ mod tests {
     }
 
     #[test]
-    fn the_last_visible_track_cannot_be_hidden() {
+    fn every_track_can_be_hidden_and_the_area_turns_black() {
         let mut harness = harness(app_with_surround());
         harness.step();
         harness.step();
@@ -4075,7 +4072,20 @@ mod tests {
         harness.step();
         harness.step();
         let state = harness.state();
-        assert_eq!(state.lanes(state.tracks.audio_channels), [0]);
+        assert_eq!(state.lanes(state.tracks.audio_channels), Vec::<usize>::new());
+        // Spectre, onde et survol de la zone vide : rien ne casse
+        let body = harness.state().timeline_body;
+        harness.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(body.left() + 200.0, body.bottom() - 50.0)));
+        harness.step();
+        harness.state_mut().tracks.view = AudioView::Waveform;
+        harness.step();
+        harness.step();
+        // Et la piste revient
+        harness.get_by_label("Left").click();
+        harness.step();
+        harness.step();
+        let state = harness.state();
+        assert_eq!(state.lanes(state.tracks.audio_channels), [1]);
     }
 
     #[test]
@@ -4567,7 +4577,7 @@ mod tests {
         harness.get_by_label("Réglages de la détection").click();
         harness.step();
         harness.step();
-        assert_eq!(harness.query_all_by_label("Gap (s)").count(), 2, "glissière et valeur");
+        assert_eq!(harness.query_all_by_label("Gap (s)").count(), 1, "une seule case");
         let rows: Vec<Vec<egui::Rect>> = ["Gap (s)", "Anticipation (s)", "Post (s)"]
             .iter()
             .map(|name| harness.query_all_by_label(name).map(|node| node.rect()).collect())

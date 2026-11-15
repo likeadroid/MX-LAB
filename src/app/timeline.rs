@@ -28,8 +28,6 @@ const LOUDNESS_FLOOR: f32 = -60.0;
 /// La piste des séquences loge dans son en-tête son titre et les 4 réglages de détection.
 const SEQUENCES_HEIGHT: f32 = 92.0;
 const SCALE_MIN_SPACING: f32 = 14.0;
-/// Largeur commune des cases de valeur des réglages.
-pub const VALUE_WIDTH: f32 = 34.0;
 pub const METER_FLOOR: f32 = crate::monitor::FADER_FLOOR_DB;
 const METER_TOP: f32 = crate::monitor::FADER_TOP_DB;
 /// Dégradé de la barre, de -Inf à 0 dB : les couleurs du spectrogramme, aux mêmes proportions.
@@ -794,12 +792,7 @@ impl App {
     /// Pistes à afficher, de haut en bas. Toujours au moins une : le mix si rien d'autre n'existe.
     pub fn lanes(&self, channels: Channels) -> Vec<usize> {
         let count = self.track_names().len() + 1;
-        let lanes: Vec<usize> = (0..count).filter(|track| channels.is_visible(*track)).collect();
-        if lanes.is_empty() {
-            vec![0]
-        } else {
-            lanes
-        }
+        (0..count).filter(|track| channels.is_visible(*track)).collect()
     }
 
     /// Une fois les pistes affichées servies, prépare les autres, une à la fois, pour qu'elles
@@ -1046,10 +1039,13 @@ impl App {
                 .find(|r| r.0 == Row::Audio && self.tracks.view == AudioView::Spectrum && pos.y >= r.1 && pos.y < r.2)
             {
                 let lanes = self.lanes(self.tracks.audio_channels).len();
-                let height = (row.2 - row.1) / lanes as f32;
-                let lane = (((pos.y - row.1) / height) as usize).min(lanes - 1) as f32;
-                let band = row_rect(row.1 + lane * height, row.1 + (lane + 1.0) * height);
-                text = format!("{text}  ·  {}", frequency_label(frequency_at(band, pos.y)));
+                // Aucune piste affichée : pas de fréquence à lire
+                if lanes > 0 {
+                    let height = (row.2 - row.1) / lanes as f32;
+                    let lane = (((pos.y - row.1) / height) as usize).min(lanes - 1) as f32;
+                    let band = row_rect(row.1 + lane * height, row.1 + (lane + 1.0) * height);
+                    text = format!("{text}  ·  {}", frequency_label(frequency_at(band, pos.y)));
+                }
             }
             let on_image = rows.iter().any(|r| r.0 == Row::Strip && pos.y >= r.1 && pos.y < r.2);
             if let Some(chapter) = self.chapter_at(time).filter(|_| on_image) {
@@ -1149,40 +1145,15 @@ impl App {
         self.sensitivity_box(ui, slider);
     }
 
-    /// La sensibilité : une case avec son nom, sa valeur et une glissière.
+    /// La sensibilité, dans le même composant que les réglages de l'engrenage.
     fn sensitivity_box(&mut self, ui: &mut egui::Ui, rect: Rect) {
         let Some(media) = &self.media else { return };
         let enabled = !media.project.scores.is_empty() && !media.project.detection_off;
         let mut settings = media.project.settings.clone();
-        let sense = if enabled { Sense::click_and_drag() } else { Sense::hover() };
-        let response = ui.interact(rect, ui.scope_id().with("sensitivity"), sense).on_hover_text(crate::SENSITIVITY_HELP);
-        let track = Rect::from_min_max(Pos2::new(rect.left() + 10.0, rect.bottom() - 6.0), Pos2::new(rect.right() - 10.0, rect.bottom() - 4.0));
-        let (low, high) = (detect::MIN_SENSITIVITY, detect::MAX_SENSITIVITY);
-        let mut changed = false;
-        if response.dragged() || response.clicked() {
-            if let Some(pointer) = response.interact_pointer_pos() {
-                let share = ((pointer.x - track.left()) / track.width()).clamp(0.0, 1.0) as f64;
-                let value = (low + share * (high - low)).round();
-                if value != settings.sensitivity {
-                    settings.sensitivity = value;
-                    changed = true;
-                }
-            }
-        }
-        let value = settings.sensitivity;
-        response.widget_info(|| egui::WidgetInfo::slider(enabled, value, "Sensibilité"));
-        let painter = ui.painter();
-        let color = if enabled { NAME } else { WEAK };
-        painter.rect_stroke(rect, 4.0, Stroke::new(1.0, CELL_LINE), egui::StrokeKind::Inside);
-        let text_y = rect.top() + 10.0;
-        painter.text(Pos2::new(rect.left() + 10.0, text_y), Align2::LEFT_CENTER, "Sensibilité", FontId::proportional(FONT_SIZE), color);
-        painter.text(Pos2::new(rect.right() - 10.0, text_y), Align2::RIGHT_CENTER, format!("{value:.0}"), FontId::proportional(FONT_SIZE), color);
-        painter.rect_filled(track, 1.0, Color32::from_gray(62));
-        let x = track.left() + ((value - low) / (high - low)).clamp(0.0, 1.0) as f32 * track.width();
-        let handle = Rect::from_center_size(Pos2::new(x, track.center().y), egui::vec2(3.0, 9.0));
-        painter.rect_filled(handle, 1.5, if enabled { Color32::WHITE } else { WEAK });
+        let range = detect::MIN_SENSITIVITY..=detect::MAX_SENSITIVITY;
+        let response = slider_box(ui, rect, "Sensibilité", &mut settings.sensitivity, range, enabled, crate::SENSITIVITY_HELP);
         let released = response.drag_stopped() || response.clicked();
-        self.apply_detection_settings(settings, changed, released);
+        self.apply_detection_settings(settings, response.changed(), released);
     }
 
     /// Le tableau des pistes (afficher, solo, mute), la loudness et ses cibles, la vue.
@@ -1246,7 +1217,6 @@ impl App {
         for x in [solo_left, mute_left, eye_left] {
             painter.line_segment([Pos2::new(x, table.top()), Pos2::new(x, table.bottom())], Stroke::new(1.0, CELL_LINE));
         }
-        let shown = self.lanes(self.tracks.audio_channels).len();
         for (track, &name) in tracks.iter().enumerate() {
             let top = table.top() + track as f32 * row_height;
             let row = Rect::from_min_max(Pos2::new(table.left(), top), Pos2::new(table.right(), top + row_height));
@@ -1255,20 +1225,18 @@ impl App {
             }
             let full_name = track_full_name(name);
             let visible = self.tracks.audio_channels.is_visible(track);
-            // La dernière piste affichée reste : une zone vide ne servirait à rien
-            let only = visible && shown == 1;
             // Le nom et l'œil affichent ou masquent la piste
-            let sense = if only { Sense::hover() } else { Sense::click() };
-            let help = if only { "Au moins une piste reste affichée" } else { "Afficher ou masquer cette piste" };
+            let sense = Sense::click();
+            let help = "Afficher ou masquer cette piste";
             let name_cell = Rect::from_min_max(row.min, Pos2::new(solo_left, row.bottom()));
             let eye_cell = Rect::from_min_max(Pos2::new(eye_left, row.top()), row.max);
             let response = ui.interact(name_cell, ui.scope_id().with(("track-visible", track)), sense).on_hover_text(help);
-            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, !only, visible, full_name));
+            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, visible, full_name));
             let eye_response = ui.interact(eye_cell, ui.scope_id().with(("track-eye", track)), sense).on_hover_text(help);
             let eye_label = format!("Afficher {full_name}");
-            eye_response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, !only, visible, &eye_label));
+            eye_response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, visible, &eye_label));
             for (cell, hovered) in [(name_cell, response.hovered()), (eye_cell, eye_response.hovered())] {
-                if hovered && !only {
+                if hovered {
                     painter.rect_filled(cell.shrink(1.0), 2.0, Color32::from_white_alpha(8));
                 }
             }
@@ -1859,6 +1827,11 @@ impl App {
         // Le spectre peut arriver avant le reste de l'analyse
         let signals = self.media.as_ref().and_then(|m| m.signals.as_ref());
         let lanes = self.lanes(self.tracks.audio_channels);
+        // Toutes les pistes masquées : la zone reste noire
+        if lanes.is_empty() {
+            painter.rect_filled(rect, 0.0, Color32::BLACK);
+            return;
+        }
         let lane_height = rect.height() / lanes.len() as f32;
         let gain = signals.map_or(1.0, |s| waveform_gain(s, self.waveform_normalized));
         for (lane, &index) in lanes.iter().enumerate() {
@@ -2169,6 +2142,57 @@ fn put_left(ui: &mut egui::Ui, rect: Rect, widget: impl egui::Widget) -> egui::R
     ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(layout), |ui| ui.add(widget)).inner
 }
 
+/// Case réglable : nom à gauche, valeur à droite, glissière collée au bas de la case.
+/// Un clic ou un glissé n'importe où dans la case règle la valeur, au pas de 1.
+pub fn slider_box(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    label: &str,
+    value: &mut f64,
+    range: std::ops::RangeInclusive<f64>,
+    enabled: bool,
+    help: &str,
+) -> egui::Response {
+    const RADIUS: u8 = 5;
+    const TRACK_HEIGHT: f32 = 3.0;
+    let (low, high) = (*range.start(), *range.end());
+    let sense = if enabled { Sense::click_and_drag() } else { Sense::hover() };
+    let mut response = ui.interact(rect, ui.scope_id().with(("slider-box", label)), sense).on_hover_text(help);
+    let inner = rect.shrink(1.0);
+    let track = Rect::from_min_max(Pos2::new(inner.left(), inner.bottom() - TRACK_HEIGHT), inner.max);
+    // La poignée reste entière dans la case, aux deux bouts
+    let (first, last) = (track.left() + 3.0, track.right() - 3.0);
+    if response.dragged() || response.clicked() {
+        if let Some(pointer) = response.interact_pointer_pos() {
+            let share = ((pointer.x - first) / (last - first)).clamp(0.0, 1.0) as f64;
+            let next = (low + share * (high - low)).round().clamp(low, high);
+            if next != *value {
+                *value = next;
+                response.mark_changed();
+            }
+        }
+    }
+    let shown = *value;
+    response.widget_info(|| egui::WidgetInfo::slider(enabled, shown, label));
+
+    let painter = ui.painter();
+    let hovered = enabled && (response.hovered() || response.dragged());
+    let border = if hovered { Color32::from_rgb(70, 72, 79) } else { CELL_LINE };
+    painter.rect_filled(rect, RADIUS, BG);
+    // La glissière épouse les coins arrondis du bas
+    let bottom_corners = egui::CornerRadius { nw: 0, ne: 0, sw: RADIUS - 1, se: RADIUS - 1 };
+    painter.rect_filled(track, bottom_corners, Color32::from_rgb(56, 58, 63));
+    painter.rect_stroke(rect, RADIUS, Stroke::new(1.0, border), egui::StrokeKind::Inside);
+    let color = if enabled { NAME } else { WEAK };
+    let text_y = rect.top() + (rect.height() - TRACK_HEIGHT) / 2.0;
+    painter.text(Pos2::new(rect.left() + 10.0, text_y), Align2::LEFT_CENTER, label, FontId::proportional(FONT_SIZE), color);
+    painter.text(Pos2::new(rect.right() - 10.0, text_y), Align2::RIGHT_CENTER, format!("{shown:.0}"), FontId::proportional(FONT_SIZE), color);
+    let x = first + ((shown - low) / (high - low)).clamp(0.0, 1.0) as f32 * (last - first);
+    let handle = Rect::from_center_size(Pos2::new(x, track.center().y - 1.0), egui::vec2(4.0, 9.0));
+    painter.rect_filled(handle, 2.0, if enabled { Color32::WHITE } else { WEAK });
+    response
+}
+
 /// Titre de section en capitales, centré verticalement sur `at`.
 fn section_title(ui: &mut egui::Ui, at: Pos2, text: &str) -> egui::Response {
     // Inter Medium, si les polices de l'app sont chargées (pas dans les tests)
@@ -2355,17 +2379,6 @@ fn paint_meter(painter: &egui::Painter, rect: Rect, peak_db: f32, short_db: f32,
             painter.rect_filled(line, 0.0, color);
         }
     }
-}
-
-/// Un texte de réglage, aligné à gauche dans une largeur fixe.
-pub fn left_label(ui: &mut egui::Ui, width: f32, text: egui::RichText) -> egui::Response {
-    let layout = egui::Layout::left_to_right(egui::Align::Center);
-    ui.allocate_ui_with_layout(egui::vec2(width, 14.0), layout, |ui| {
-        ui.set_min_width(width);
-        ui.set_max_width(width);
-        ui.add(egui::Label::new(text).truncate())
-    })
-    .inner
 }
 
 pub fn loudness_text(value: f32) -> String {
