@@ -8,6 +8,7 @@ Logiciel pour étudier la musique d'un film à l'image : timeline de la vidéo, 
 - **Loudness** BS.1770 par canal (TP, I, S, M, LRA), avec cibles réglables
 - **Mixeur** : solo, mute et fader par canal
 - **Séquences** : tableau modifiable (bornes, mesures, mood, ensemble, instruments), notes, export sans perte calé sur les keyframes (FFmpeg)
+- **MIDI** : les notes de chaque séquence, transcrites par le modèle Basic Pitch (à partir de L et R en 5.1) et affichées en piano roll
 - **Projet** `<vidéo>.mx-lab.json` enregistré à côté de la vidéo
 
 ## Installer
@@ -41,6 +42,7 @@ GPL-3.0, voir `LICENSE`.
 
 ## Crédits
 - [YAMNet](https://github.com/tensorflow/models/tree/master/research/audioset/yamnet) (Apache 2.0)
+- [Basic Pitch](https://github.com/spotify/basic-pitch) de Spotify, modèle `models/basic-pitch-nmp.onnx` (Apache 2.0), exécuté par [tract](https://github.com/sonos/tract)
 - Police [Inter](https://rsms.me/inter/) (SIL Open Font License, `assets/fonts/OFL-Inter.txt`)
 - [mpv](https://mpv.io/) et [FFmpeg](https://ffmpeg.org/)
 - Inspiration : [LosslessCut](https://github.com/mifi/lossless-cut)

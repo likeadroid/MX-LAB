@@ -4,6 +4,7 @@
 //! Timeline de la vidéo, détection de la musique, onde, spectre, loudness, lecteur précis,
 //! correction et export des séquences.
 
+mod midi;
 mod monitor;
 mod mpv;
 mod music_tags;
@@ -89,6 +90,8 @@ pub enum Job {
     SpectrumPart(usize, usize, Vec<u8>),
     SpectrumDone(usize),
     Exported(Result<(usize, PathBuf), String>),
+    /// Notes d'une séquence, pour les bornes transcrites.
+    Midi(u64, (f64, f64), Result<Vec<mx_lab::transcribe::Note>, String>),
 }
 
 pub struct Media {
@@ -128,6 +131,10 @@ pub struct Media {
     film_loudness: HashMap<usize, FilmLoudness>,
     /// Loudness du programme par séquence, pour le tableau, avec les bornes mesurées.
     sequence_loudness: HashMap<u64, ((f64, f64), signals::Measure)>,
+    /// Notes transcrites, par séquence.
+    midi: HashMap<u64, midi::Transcription>,
+    /// La séquence en cours de transcription, et ses bornes.
+    midi_running: Option<(u64, (f64, f64))>,
 }
 
 #[derive(Default)]
@@ -1099,6 +1106,8 @@ impl App {
             sequence_tags: HashMap::new(),
             film_loudness: HashMap::new(),
             sequence_loudness: HashMap::new(),
+            midi: HashMap::new(),
+            midi_running: None,
         });
         // Le fichier projet existe dès l'import, comme avec LosslessCut
         self.save_now();
@@ -1397,6 +1406,14 @@ impl App {
                         state.values[start..end].copy_from_slice(&values);
                         state.revision += 1;
                     }
+                }
+                Job::Midi(id, bounds, result) => {
+                    media.midi_running = None;
+                    let notes = result.unwrap_or_else(|error| {
+                        self.status = format!("Transcription MIDI impossible : {error}");
+                        Vec::new()
+                    });
+                    media.midi.insert(id, (bounds, Arc::new(notes)));
                 }
                 Job::SpectrumDone(channel) => {
                     if let Some(state) = media.spectra.get_mut(&channel) {
@@ -1796,6 +1813,9 @@ impl App {
                     }
                     if menu_check(ui, self.tracks.audio, "Audio").clicked() {
                         self.tracks.audio = !self.tracks.audio;
+                    }
+                    if menu_check(ui, self.tracks.midi, "MIDI").clicked() {
+                        self.tracks.midi = !self.tracks.midi;
                     }
                 });
                 ui.menu_button("Rendu", |ui| {
@@ -2839,6 +2859,8 @@ mod tests {
             sequence_tags: HashMap::new(),
             film_loudness: HashMap::new(),
             sequence_loudness: HashMap::new(),
+            midi: HashMap::new(),
+            midi_running: None,
         });
         app
     }
@@ -2879,6 +2901,16 @@ mod tests {
         media.smoothed = detect::smoothed_scores(&scores);
         media.project.scores = scores;
         app.view = View { start: 0.0, span: duration };
+        // Les notes d'une vraie vidéo, posées sur la première séquence, vue de près
+        if let Ok(video) = std::env::var("MX_LAB_SNAPSHOT_MIDI") {
+            let (layout, length) = detect::probe_audio(Path::new(&video)).unwrap();
+            let media = app.media.as_mut().unwrap();
+            let first = media.project.segments[0].clone();
+            let notes = mx_lab::transcribe::transcribe(Path::new(&video), 0, &layout, 0.0, length.min(first.end - first.start)).unwrap();
+            let shifted = notes.iter().map(|n| mx_lab::transcribe::Note { start: n.start + first.start, end: n.end + first.start, ..*n }).collect();
+            media.midi.insert(first.id, ((first.start, first.end), Arc::new(shifted)));
+            app.view = View { start: first.start - 5.0, span: first.end - first.start + 10.0 };
+        }
         let pixels_per_point: f32 = std::env::var("MX_LAB_SNAPSHOT_SCALE").ok().and_then(|s| s.parse().ok()).unwrap_or(2.0);
         let mut harness = Harness::builder()
             .with_size(egui::vec2(1500.0, 950.0))
@@ -3938,6 +3970,7 @@ mod tests {
     fn normalize_button_sits_just_above_the_view_selector() {
         let mut app = app_with_surround();
         app.tracks.view = AudioView::Waveform;
+        app.tracks.midi = false; // La piste Audio en bas de la timeline
         let mut harness = harness(app);
         harness.step();
         harness.step();
@@ -4066,6 +4099,31 @@ mod tests {
         harness.step();
         harness.step();
         assert_eq!(lanes(&harness), [1, 4]);
+    }
+
+    #[test]
+    fn midi_track_draws_the_notes_and_names_the_pitch_under_the_pointer() {
+        let mut app = app();
+        let first = app.media.as_ref().unwrap().project.segments[0].clone();
+        let notes = vec![
+            mx_lab::transcribe::Note { start: first.start + 1.0, end: first.start + 3.0, pitch: 60, velocity: 0.8 },
+            mx_lab::transcribe::Note { start: first.start + 2.0, end: first.start + 4.0, pitch: 67, velocity: 0.4 },
+        ];
+        app.media.as_mut().unwrap().midi.insert(first.id, ((first.start, first.end), Arc::new(notes)));
+        let mut harness = harness(app);
+        harness.step();
+        harness.get_by_label("MIDI");
+        let body = harness.state().timeline_body;
+        let rows = timeline::layout_rows(body.top(), body.height(), harness.state().tracks);
+        let (_, top, bottom) = *rows.iter().find(|r| r.0 == timeline::Row::Midi).unwrap();
+        let rect = egui::Rect::from_min_max(egui::pos2(body.left(), top), egui::pos2(body.right(), bottom));
+        // Les notes fixent l'étendue : do 4 et sol 4 y sont, en bas et en haut à leur place
+        let state = harness.state();
+        let low = state.midi_pitch_at(rect, bottom - 1.0);
+        let high = state.midi_pitch_at(rect, top + 1.0);
+        assert!(low <= 60 && high >= 67 && high - low >= 24, "{low} {high}");
+        harness.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(body.left() + 100.0, (top + bottom) / 2.0)));
+        harness.step();
     }
 
     #[test]
@@ -4312,6 +4370,7 @@ mod tests {
     fn view_selector_sits_at_the_bottom_and_switches_the_view() {
         let mut app = app_with_surround();
         app.tracks.audio_channels = timeline::Channels::tracks_only(); // Les S et M ne doivent pas gêner
+        app.tracks.midi = false; // La piste Audio en bas de la timeline
         let mut harness = harness(app);
         harness.step();
         harness.step();
@@ -4505,7 +4564,9 @@ mod tests {
 
     #[test]
     fn loudness_toggle_replaces_the_gate_setting() {
-        let mut harness = harness(app_with_surround());
+        let mut app = app_with_surround();
+        app.tracks.midi = false; // Toute la hauteur à l'audio : les cibles y tiennent
+        let mut harness = harness(app);
         harness.step();
         harness.step();
         assert_eq!(harness.query_all_by_label("Gate").count(), 0, "le gate reste actif, sans réglage");

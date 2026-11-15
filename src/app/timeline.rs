@@ -55,8 +55,8 @@ const MIXER_PADDING: f32 = 8.0;
 const METER_BACK: Color32 = Color32::from_rgb(12, 13, 16);
 
 // Colonne des en-têtes
-const PAD: f32 = 11.0;
-const FONT_SIZE: f32 = 11.5;
+pub const PAD: f32 = 11.0;
+pub const FONT_SIZE: f32 = 11.5;
 const CONTROL_HEIGHT: f32 = 24.0;
 const CELL_HEIGHT: f32 = 22.0;
 const TOGGLE_CELL: f32 = 24.0;
@@ -75,7 +75,7 @@ const NAME: Color32 = Color32::from_rgb(222, 224, 228);
 const BG: Color32 = Color32::from_rgb(20, 22, 26);
 const ROW_LINE: Color32 = Color32::from_rgb(42, 45, 52);
 const TEXT: Color32 = Color32::from_rgb(190, 195, 205);
-const WEAK: Color32 = Color32::from_rgb(120, 125, 135);
+pub const WEAK: Color32 = Color32::from_rgb(120, 125, 135);
 pub const PLAYHEAD: Color32 = Color32::from_rgb(255, 72, 72);
 const DETECTED: Color32 = Color32::from_rgb(38, 150, 136);
 const EDITED: Color32 = Color32::from_rgb(70, 130, 210);
@@ -95,6 +95,7 @@ pub enum Row {
     Strip,
     Sequences,
     Audio,
+    Midi,
 }
 
 /// Ce que la piste audio montre sous la loudness, toujours superposée.
@@ -146,6 +147,8 @@ pub struct Tracks {
     pub audio_channels: Channels,
     /// Courbes de loudness sur le spectre et repères du mixeur.
     pub loudness: bool,
+    /// Notes transcrites des séquences, en piano roll.
+    pub midi: bool,
 }
 
 impl Default for Tracks {
@@ -156,6 +159,7 @@ impl Default for Tracks {
             view: AudioView::default(),
             audio_channels: Channels::default(),
             loudness: true,
+            midi: true,
         }
     }
 }
@@ -169,6 +173,9 @@ pub fn layout_rows(top: f32, height: f32, tracks: Tracks) -> Vec<(Row, f32, f32)
     items.push((Row::Sequences, SEQUENCES_HEIGHT, 0.0));
     if tracks.audio {
         items.push((Row::Audio, 0.0, 1.0));
+    }
+    if tracks.midi {
+        items.push((Row::Midi, 0.0, 0.6));
     }
     let fixed: f32 = items.iter().map(|i| i.1).sum();
     let weights: f32 = items.iter().map(|i| i.2).sum();
@@ -410,7 +417,7 @@ fn paint_legend(painter: &egui::Painter, rect: Rect, entries: &[(&str, Color32)]
 }
 
 /// La même couleur, éclaircie vers le blanc (`amount` de 0 à 1).
-fn lighter(color: Color32, amount: f32) -> Color32 {
+pub fn lighter(color: Color32, amount: f32) -> Color32 {
     let mix = |value: u8| (value as f32 + (255.0 - value as f32) * amount) as u8;
     Color32::from_rgb(mix(color.r()), mix(color.g()), mix(color.b()))
 }
@@ -430,7 +437,7 @@ fn track_full_name(name: &str) -> &str {
     }
 }
 
-fn segment_color(origin: Origin) -> Color32 {
+pub fn segment_color(origin: Origin) -> Color32 {
     match origin {
         Origin::Detected => DETECTED,
         Origin::Edited => EDITED,
@@ -531,6 +538,7 @@ impl App {
         add(Row::Strip, "Vignettes et keyframes", media.strip_progress);
         add(Row::Sequences, "Détection de la musique", media.detect_progress);
         add(Row::Audio, "Analyse audio", media.signals_progress);
+        work.extend(self.midi_loading());
         work
     }
 
@@ -938,6 +946,7 @@ impl App {
         self.update_spectrogram(ui.ctx(), (body.width() * pixels) as usize);
         self.update_background_spectra(ui.ctx());
         self.update_measures();
+        self.update_midi(ui.ctx());
 
         let painter = ui.painter_at(Rect::from_min_max(full.min, Pos2::new(full.right(), last)));
         painter.rect_filled(full, 0.0, BG);
@@ -961,6 +970,7 @@ impl App {
                 }
                 Row::Sequences => self.paint_sequences(&tracks, rect),
                 Row::Audio => self.paint_audio(&tracks, rect),
+                Row::Midi => self.paint_midi(&tracks, rect),
             }
             // La barre de zoom et la règle partagent leur en-tête : pas de trait entre elles
             let left = if row == Row::Overview { body.left() } else { full.left() };
@@ -1047,6 +1057,10 @@ impl App {
                     text = format!("{text}  ·  {}", frequency_label(frequency_at(band, pos.y)));
                 }
             }
+            if let Some(row) = rows.iter().find(|r| r.0 == Row::Midi && pos.y >= r.1 && pos.y < r.2) {
+                let pitch = self.midi_pitch_at(row_rect(row.1, row.2), pos.y);
+                text = format!("{text}  ·  {}", mx_lab::transcribe::note_name(pitch));
+            }
             let on_image = rows.iter().any(|r| r.0 == Row::Strip && pos.y >= r.1 && pos.y < r.2);
             if let Some(chapter) = self.chapter_at(time).filter(|_| on_image) {
                 text = format!("{text}  ·  {}", chapter.title);
@@ -1078,6 +1092,7 @@ impl App {
                 }
                 Row::Sequences => self.sequences_header(ui, section),
                 Row::Audio => self.audio_header(ui, section),
+                Row::Midi => self.midi_header(ui, section),
             }
             ui.painter().line_segment(
                 [Pos2::new(column.left(), bottom), Pos2::new(column.right(), bottom)],
@@ -2194,7 +2209,7 @@ pub fn slider_box(
 }
 
 /// Titre de section en capitales, centré verticalement sur `at`.
-fn section_title(ui: &mut egui::Ui, at: Pos2, text: &str) -> egui::Response {
+pub fn section_title(ui: &mut egui::Ui, at: Pos2, text: &str) -> egui::Response {
     // Inter Medium, si les polices de l'app sont chargées (pas dans les tests)
     let medium = egui::FontFamily::Name("medium".into());
     let loaded = ui.ctx().fonts(|fonts| fonts.definitions().families.get(&medium).is_some_and(|f| !f.is_empty()));
@@ -2896,7 +2911,7 @@ mod tests {
     #[test]
     fn music_and_sequences_share_a_track_and_audio_is_a_single_track() {
         let rows: Vec<Row> = layout_rows(0.0, 600.0, Tracks::default()).iter().map(|r| r.0).collect();
-        assert_eq!(rows, [Row::Overview, Row::Ruler, Row::Strip, Row::Sequences, Row::Audio]);
+        assert_eq!(rows, [Row::Overview, Row::Ruler, Row::Strip, Row::Sequences, Row::Audio, Row::Midi]);
     }
 
     #[test]
