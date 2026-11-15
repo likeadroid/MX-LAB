@@ -45,7 +45,7 @@ const SHUTTLE: [f64; 5] = [1.0, 2.0, 4.0, 8.0, 16.0];
 const GAP_HELP: &str = "Interruption de la musique tolérée dans une séquence.";
 const ANTICIPATION_HELP: &str = "Marge ajoutée avant chaque séquence détectée.";
 const POST_HELP: &str = "Marge ajoutée après chaque séquence détectée.";
-const SENSITIVITY_HELP: &str = "Plus elle est haute, plus la détection retient de passages : 50 par défaut, 70 pour des nappes ou drones discrets. Les séquences retouchées ou ajoutées à la main sont conservées.";
+pub const SENSITIVITY_HELP: &str = "Plus elle est haute, plus la détection retient de passages : 50 par défaut, 70 pour des nappes ou drones discrets. Les séquences retouchées ou ajoutées à la main sont conservées.";
 const SHORTCUTS: &str = "Espace : lecture / pause\n\
 J / K / L : arrière / stop / avant (répéter pour accélérer)\n\
 Flèches gauche / droite : image précédente / suivante\n\
@@ -1964,35 +1964,39 @@ impl App {
         }
     }
 
-    /// Les réglages de la détection, dans l'en-tête de la piste dont ils décident.
+    /// Gap, anticipation et post, dans la fenêtre de l'engrenage. La sensibilité est dans l'en-tête.
     fn detection_controls(&mut self, ui: &mut egui::Ui) {
         let Some(media) = &self.media else { return };
         let mut settings = media.project.settings.clone();
         let has_scores = !media.project.scores.is_empty();
         let mut changed = false;
         let mut released = false;
+        ui.set_min_width(250.0);
         ui.add_enabled_ui(has_scores, |ui| {
-            ui.style_mut().override_font_id = Some(egui::FontId::proportional(10.0));
-            ui.spacing_mut().interact_size = egui::vec2(timeline::VALUE_WIDTH, 14.0);
+            ui.spacing_mut().interact_size = egui::vec2(timeline::VALUE_WIDTH, 18.0);
             let mut row = |label: &str, help: &str, value: &mut f64, range: std::ops::RangeInclusive<f64>| {
                 ui.horizontal(|ui| {
-                    let label = timeline::left_label(ui, 72.0, RichText::new(label).size(10.0)).on_hover_text(help);
+                    let label = timeline::left_label(ui, 100.0, RichText::new(label)).on_hover_text(help);
                     // Mêmes dimensions sur toutes les lignes, quelle que soit la valeur
                     ui.spacing_mut().slider_width = (ui.available_width() - timeline::VALUE_WIDTH - ui.spacing().item_spacing.x).max(30.0);
                     let slider = ui.add(egui::Slider::new(value, range.clone()).step_by(1.0).show_value(false));
                     let drag = egui::DragValue::new(value).range(range).speed(0.25).fixed_decimals(0);
-                    let drag = ui.add_sized([timeline::VALUE_WIDTH, 14.0], drag);
+                    let drag = ui.add_sized([timeline::VALUE_WIDTH, 18.0], drag);
                     for response in [slider.labelled_by(label.id).on_hover_text(help), drag.labelled_by(label.id).on_hover_text(help)] {
                         changed |= response.changed();
                         released |= response.drag_stopped() || (response.changed() && !response.dragged());
                     }
                 });
             };
-            row("Sensibilité", SENSITIVITY_HELP, &mut settings.sensitivity, 10.0..=100.0);
             row("Gap (s)", GAP_HELP, &mut settings.gap, 1.0..=60.0);
             row("Anticipation (s)", ANTICIPATION_HELP, &mut settings.anticipation, 0.0..=20.0);
             row("Post (s)", POST_HELP, &mut settings.post, 0.0..=20.0);
         });
+        self.apply_detection_settings(settings, changed, released);
+    }
+
+    /// Applique des réglages de détection modifiés ; une seule étape d'annulation par geste.
+    fn apply_detection_settings(&mut self, settings: project::DetectionSettings, changed: bool, released: bool) {
         if changed {
             if !self.settings_grabbed {
                 self.remember();
@@ -2771,6 +2775,30 @@ mod tests {
         Harness::builder()
             .with_size(egui::vec2(1500.0, 950.0))
             .build_ui_state(|ui, app: &mut App| app.draw(ui), app)
+    }
+
+    /// Image de l'interface, pour la comparer à une maquette :
+    /// `MX_LAB_SNAPSHOT=fichier.png cargo test --profile studio-dev snapshot_of_the_window -- --ignored`
+    #[test]
+    #[ignore]
+    fn snapshot_of_the_window() {
+        let mut app = app_with_surround();
+        app.media.as_mut().unwrap().project.scores = vec![0.0; 100];
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1500.0, 950.0))
+            .with_pixels_per_point(2.0)
+            .build_ui_state(
+                |ui, app: &mut App| {
+                    style(ui.ctx());
+                    app.draw(ui)
+                },
+                app,
+            );
+        for _ in 0..4 {
+            harness.step();
+        }
+        let path = std::env::var("MX_LAB_SNAPSHOT").unwrap_or_else(|_| "mx-lab-snapshot.png".into());
+        harness.render().expect("rendu wgpu").save(&path).expect("écriture de l'image");
     }
 
     #[test]
@@ -3816,7 +3844,7 @@ mod tests {
         let selector = harness.get_by_label("Onde").rect();
         assert!(button.top() > last_track.bottom() + 50.0, "{button:?} {last_track:?}");
         assert!(button.bottom() <= selector.top() && selector.top() - button.bottom() < 6.0, "{button:?} {selector:?}");
-        assert!(bottom - selector.bottom() < 6.0, "{selector:?} {bottom}");
+        assert!(bottom - selector.bottom() < 14.0, "{selector:?} {bottom}");
     }
 
     #[test]
@@ -3994,11 +4022,47 @@ mod tests {
     }
 
     #[test]
-    fn mix_view_has_no_solo_button() {
+    fn solo_and_mute_stay_in_the_table_whatever_is_shown() {
         let mut harness = harness(app_with_surround());
         harness.step();
         harness.step();
-        assert_eq!(harness.query_all_by_label("S").count(), 0);
+        // Le mix seul affiché : chaque canal garde ses S et M, le mix n'en a pas
+        assert_eq!(harness.query_all_by_label("S").count(), 6);
+        assert_eq!(harness.query_all_by_label("M").count(), 6);
+        let solo = harness.get_all_by_label("S").next().unwrap().rect();
+        let left = harness.get_by_label("Left").rect();
+        assert!((solo.center().y - left.center().y).abs() < 1.0, "en face de son canal : {solo:?} {left:?}");
+    }
+
+    #[test]
+    fn sensitivity_box_and_detection_switch() {
+        let mut app = app();
+        app.media.as_mut().unwrap().project.scores = vec![0.0; 100];
+        let mut harness = harness(app);
+        harness.step();
+        let rect = harness.get_by_label("Sensibilité").rect();
+        harness.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(rect.right() - 2.0, rect.bottom() - 5.0)));
+        harness.input_mut().events.push(egui::Event::PointerButton {
+            pos: egui::pos2(rect.right() - 2.0, rect.bottom() - 5.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.input_mut().events.push(egui::Event::PointerButton {
+            pos: egui::pos2(rect.right() - 2.0, rect.bottom() - 5.0),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.step();
+        harness.step();
+        assert_eq!(harness.state().media.as_ref().unwrap().project.settings.sensitivity, 100.0);
+
+        assert!(harness.state().tracks.music_curve);
+        harness.get_by_label("Détection").click();
+        harness.step();
+        harness.step();
+        assert!(!harness.state().tracks.music_curve);
     }
 
     #[test]
@@ -4091,7 +4155,7 @@ mod tests {
         let spectrum = harness.get_by_label("Spectre").rect();
         let wave = harness.get_by_label("Onde").rect();
         assert!(wave.left() >= spectrum.right() - 0.5, "{spectrum:?} {wave:?}");
-        assert!(harness.state().timeline_body.bottom() - wave.bottom() < 6.0, "{wave:?}");
+        assert!(harness.state().timeline_body.bottom() - wave.bottom() < 14.0, "{wave:?}");
         assert_eq!(spectrum.top(), wave.top());
         assert_eq!(spectrum.width(), wave.width());
         assert!(wave.right() < harness.state().timeline_body.left());
@@ -4345,8 +4409,15 @@ mod tests {
     fn detection_rows_are_left_aligned_and_share_their_dimensions() {
         let mut app = app();
         app.media.as_mut().unwrap().project.scores = vec![0.0; 100];
-        let harness = harness(app);
-        let rows: Vec<Vec<egui::Rect>> = ["Sensibilité", "Gap (s)", "Anticipation (s)", "Post (s)"]
+        let mut harness = harness(app);
+        harness.step();
+        // Gap, anticipation et post sont derrière l'engrenage
+        assert_eq!(harness.query_all_by_label("Gap (s)").count(), 0);
+        harness.get_by_label("Réglages de la détection").click();
+        harness.step();
+        harness.step();
+        assert_eq!(harness.query_all_by_label("Gap (s)").count(), 2, "glissière et valeur");
+        let rows: Vec<Vec<egui::Rect>> = ["Gap (s)", "Anticipation (s)", "Post (s)"]
             .iter()
             .map(|name| harness.query_all_by_label(name).map(|node| node.rect()).collect())
             .collect();
@@ -4387,7 +4458,7 @@ mod tests {
 
     /// Extrait fourni avec le projet, copié pour ne rien écrire à côté de l'original.
     fn real_clip(name: &str) -> Option<PathBuf> {
-        let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("Severance");
+        let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("Severance");
         let source = std::fs::read_dir(folder).ok()?.flatten().find(|e| e.file_name().to_string_lossy().ends_with("seg04.mkv"))?;
         let target = std::env::temp_dir().join(format!("music-studio-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&target);

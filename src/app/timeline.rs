@@ -9,8 +9,7 @@ use rayon::prelude::*;
 use std::sync::OnceLock;
 use std::time::Instant;
 
-pub const HEADER_WIDTH: f32 = 176.0;
-const AUDIO_CONTROLS_WIDTH: f32 = 94.0;
+pub const HEADER_WIDTH: f32 = 192.0;
 const MIN_SPAN: f64 = 0.5;
 /// En pixels : à cette distance d'une voisine, une poignée lâchée s'y colle.
 const MERGE_DISTANCE: f32 = 4.0;
@@ -28,8 +27,6 @@ pub const LOADING_REFRESH: std::time::Duration = std::time::Duration::from_milli
 const LOUDNESS_FLOOR: f32 = -60.0;
 /// La piste des séquences loge dans son en-tête son titre et les 4 réglages de détection.
 const SEQUENCES_HEIGHT: f32 = 92.0;
-/// Place des réglages de cible et du bouton du bas, sous la liste des pistes.
-const TARGETS_ROOM: f32 = 120.0;
 const SCALE_MIN_SPACING: f32 = 14.0;
 /// Largeur commune des cases de valeur des réglages.
 pub const VALUE_WIDTH: f32 = 34.0;
@@ -52,16 +49,30 @@ const METER_FALL_DB_PER_S: f32 = 30.0;
 /// Inertie des repères de loudness, à la montée et à la descente.
 const METER_RISE_S: f32 = 0.06;
 const METER_FALL_S: f32 = 0.18;
-const VIEW_SELECTOR_HEIGHT: f32 = 20.0;
-const NORMALIZE_HEIGHT: f32 = 18.0;
-const AUDIO_TITLE_HEIGHT: f32 = 17.0;
-const TRACK_ROW_HEIGHT: f32 = 16.0;
 const MIXER_TRACK_WIDTH: f32 = 24.0;
 const MIXER_TRACK_BAR: f32 = 12.0;
 const MIXER_MASTER_BAR: f32 = 24.0;
 const MIXER_SCALE_WIDTH: f32 = 26.0;
 const MIXER_PADDING: f32 = 8.0;
 const METER_BACK: Color32 = Color32::from_rgb(12, 13, 16);
+
+// Colonne des en-têtes
+const PAD: f32 = 11.0;
+const FONT_SIZE: f32 = 11.5;
+const CONTROL_HEIGHT: f32 = 24.0;
+const CELL_HEIGHT: f32 = 22.0;
+const TOGGLE_CELL: f32 = 24.0;
+const SWITCH_HEIGHT: f32 = 20.0;
+const SWITCH_GAP: f32 = 10.0;
+const TARGET_LABEL_HEIGHT: f32 = 18.0;
+const TARGET_ROW_HEIGHT: f32 = 21.0;
+const TARGET_VALUE_WIDTH: f32 = 44.0;
+const SECTION_LINE: Color32 = Color32::from_rgb(9, 9, 11);
+const CELL_LINE: Color32 = Color32::from_rgb(50, 52, 58);
+const CELL_FILL: Color32 = Color32::from_rgb(40, 41, 46);
+const SELECTED_FILL: Color32 = Color32::from_rgb(60, 61, 67);
+const TITLE: Color32 = Color32::from_rgb(240, 241, 244);
+const NAME: Color32 = Color32::from_rgb(222, 224, 228);
 
 const BG: Color32 = Color32::from_rgb(20, 22, 26);
 const ROW_LINE: Color32 = Color32::from_rgb(42, 45, 52);
@@ -137,11 +148,20 @@ pub struct Tracks {
     pub audio_channels: Channels,
     /// Courbes de loudness sur le spectre et repères du mixeur.
     pub loudness: bool,
+    /// Probabilité de musique et seuil de détection, sur la piste des séquences.
+    pub music_curve: bool,
 }
 
 impl Default for Tracks {
     fn default() -> Self {
-        Tracks { strip: true, audio: true, view: AudioView::default(), audio_channels: Channels::default(), loudness: true }
+        Tracks {
+            strip: true,
+            audio: true,
+            view: AudioView::default(),
+            audio_channels: Channels::default(),
+            loudness: true,
+            music_curve: true,
+        }
     }
 }
 
@@ -952,10 +972,9 @@ impl App {
                 Row::Sequences => self.paint_sequences(&tracks, rect),
                 Row::Audio => self.paint_audio(&tracks, rect),
             }
-            painter.line_segment(
-                [Pos2::new(full.left(), bottom), Pos2::new(full.right(), bottom)],
-                Stroke::new(1.0, ROW_LINE),
-            );
+            // La barre de zoom et la règle partagent leur en-tête : pas de trait entre elles
+            let left = if row == Row::Overview { body.left() } else { full.left() };
+            painter.line_segment([Pos2::new(left, bottom), Pos2::new(full.right(), bottom)], Stroke::new(1.0, ROW_LINE));
         }
 
         // Teinte des séquences et poignées de la séquence choisie, au travers des analyses
@@ -1050,145 +1069,295 @@ impl App {
     }
 
     fn headers(&mut self, ui: &mut egui::Ui, full: Rect, rows: &[(Row, f32, f32)]) {
+        let bottom = rows.last().map_or(full.bottom(), |r| r.2);
+        let column = Rect::from_min_max(full.min, Pos2::new(full.left() + HEADER_WIDTH, bottom));
         for &(row, top, bottom) in rows {
-            let rect = Rect::from_min_max(
-                Pos2::new(full.left() + 6.0, top + 1.0),
-                Pos2::new(full.left() + HEADER_WIDTH - 4.0, bottom - 1.0),
-            );
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::LEFT)));
-            child.spacing_mut().item_spacing = egui::vec2(3.0, 1.0);
-            child.spacing_mut().button_padding = egui::vec2(3.0, 0.0);
-            let small = |text: &str| egui::RichText::new(text.to_string()).size(11.0).color(TEXT);
+            let section = Rect::from_min_max(Pos2::new(column.left(), top), Pos2::new(column.right(), bottom));
             match row {
-                Row::Overview => {
-                    child.horizontal(|ui| {
-                        ui.label(small("Zoom")).on_hover_text(
-                            "Glisser une poignée : zoomer. Glisser la barre : se déplacer. Double-clic : toute la vidéo.",
-                        );
-                        let auto = ui
-                            .toggle_value(&mut self.auto_zoom, egui::RichText::new("Auto").size(11.0))
-                            .on_hover_text("Zoom auto : une séquence choisie remplit la timeline");
-                        if auto.clicked() && self.auto_zoom {
-                            self.zoom_on_selected();
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("Reset").on_hover_text("Toute la vidéo (F)").clicked() {
-                                self.view = View { start: 0.0, span: self.duration() };
-                                self.view_changed_at = Instant::now();
-                            }
-                        });
-                    });
+                // La barre de zoom et la règle partagent un seul en-tête
+                Row::Overview => continue,
+                Row::Ruler => {
+                    let top = rows.iter().find(|r| r.0 == Row::Overview).map_or(top, |r| r.1);
+                    self.zoom_header(ui, Rect::from_min_max(Pos2::new(column.left(), top), section.max));
                 }
-                Row::Ruler => {}
                 Row::Strip => {
-                    child.label(small("Image"));
+                    section_title(ui, Pos2::new(section.left() + PAD, section.center().y), "Image");
                 }
-                Row::Sequences => {
-                    child.label(small("Séquences")).on_hover_text(
-                        "Courbe : probabilité de musique. Ligne : seuil de détection. Glisser sur le vide : créer une séquence.",
-                    );
-                    self.detection_controls(&mut child);
-                }
-                Row::Audio => {
-                    drop(child);
-                    self.audio_header(ui, rect);
+                Row::Sequences => self.sequences_header(ui, section),
+                Row::Audio => self.audio_header(ui, section),
+            }
+            ui.painter().line_segment(
+                [Pos2::new(column.left(), bottom), Pos2::new(column.right(), bottom)],
+                Stroke::new(2.0, SECTION_LINE),
+            );
+        }
+        ui.painter().line_segment([column.right_top(), column.right_bottom()], Stroke::new(1.0, ROW_LINE));
+    }
+
+    fn zoom_header(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        let center = rect.center().y;
+        let label = Rect::from_min_max(Pos2::new(rect.left() + PAD, center - 9.0), Pos2::new(rect.left() + 48.0, center + 9.0));
+        put_left(ui, label, egui::Label::new(egui::RichText::new("Zoom").size(FONT_SIZE).color(NAME)).selectable(false))
+            .on_hover_text("Glisser une poignée : zoomer. Glisser la barre : se déplacer. Double-clic : toute la vidéo.");
+        let buttons = Rect::from_min_max(
+            Pos2::new(rect.left() + 52.0, center - CONTROL_HEIGHT / 2.0),
+            Pos2::new(rect.right() - PAD, center + CONTROL_HEIGHT / 2.0),
+        );
+        let items = [
+            ("Auto", self.auto_zoom, "Zoom auto : une séquence choisie remplit la timeline"),
+            ("Reset", false, "Toute la vidéo (F)"),
+        ];
+        match segmented(ui, buttons, &items, 4.0, "zoom") {
+            Some(0) => {
+                self.auto_zoom = !self.auto_zoom;
+                if self.auto_zoom {
+                    self.zoom_on_selected();
                 }
             }
+            Some(1) => {
+                self.view = View { start: 0.0, span: self.duration() };
+                self.view_changed_at = Instant::now();
+            }
+            _ => {}
         }
     }
 
-    /// Commandes de la piste audio, et solo / mute en face de chaque ligne.
-    fn audio_header(&mut self, ui: &mut egui::Ui, rect: Rect) {
-        let controls = Rect::from_min_max(rect.min, Pos2::new(rect.left() + AUDIO_CONTROLS_WIDTH, rect.bottom()));
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(controls).layout(egui::Layout::top_down(egui::Align::LEFT)));
-        child.spacing_mut().item_spacing = egui::vec2(3.0, 2.0);
-        child.spacing_mut().button_padding = egui::vec2(3.0, 0.0);
-        child.label(egui::RichText::new("Audio").size(11.0).color(TEXT)).on_hover_text(
-            "Loudness toujours superposée, mesure BS.1770 en LKFS, sur toute la vidéo. \
-             Bleu : intégrée depuis le début de la vidéo, rouge hors de la cible. Blanc : short-term 3 s. \
-             Gris : momentary 400 ms. Sa graduation (-60 à 0) lui est propre.",
+    /// Titre, affichage de la courbe de détection et ses réglages, sensibilité.
+    fn sequences_header(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        let inner = rect.shrink2(egui::vec2(PAD, 0.0));
+        section_title(ui, Pos2::new(inner.left(), rect.top() + 15.0), "Séquences").on_hover_text(
+            "Courbe : probabilité de musique. Ligne : seuil de détection. Glisser sur le vide : créer une séquence.",
         );
-        // Tout en bas de la colonne, quelle que soit la hauteur de la piste : le sélecteur,
-        // et juste au-dessus le bouton qui ne concerne que l'onde
-        let selector = Rect::from_min_max(Pos2::new(rect.left(), rect.bottom() - VIEW_SELECTOR_HEIGHT), rect.max);
-        view_selector(ui, selector, &mut self.tracks.view);
-        self.channel_controls(&mut child);
-        if self.tracks.view == AudioView::Waveform {
-            let bottom = selector.top() - 2.0;
-            let slot = Rect::from_min_max(Pos2::new(rect.left(), bottom - NORMALIZE_HEIGHT), Pos2::new(controls.right(), bottom));
-            let mut bottom = ui.new_child(egui::UiBuilder::new().max_rect(slot).layout(egui::Layout::bottom_up(egui::Align::LEFT)));
-            bottom.spacing_mut().button_padding = egui::vec2(3.0, 0.0);
-            bottom
-                .toggle_value(&mut self.waveform_normalized, egui::RichText::new("Normaliser").size(10.0))
-                .on_hover_text("Amplifie l'onde pour que la crête du mix remplisse la hauteur. Le même gain s'applique à chaque piste : les écarts entre elles restent justes.");
+        let row = Rect::from_min_size(Pos2::new(inner.left(), rect.top() + 27.0), egui::vec2(inner.width(), 20.0));
+        let detection = self.tracks.music_curve;
+        if switch_row(ui, row, "Détection", detection, "Affiche la probabilité de musique et le seuil de détection sur la piste")
+            .clicked()
+        {
+            self.tracks.music_curve = !detection;
         }
+        // L'engrenage, juste après le mot : gap, anticipation et post
+        let word = ui.painter().layout_no_wrap("Détection".into(), FontId::proportional(FONT_SIZE), NAME).size().x;
+        let gear = Rect::from_center_size(Pos2::new(row.left() + word + 11.0, row.center().y), egui::vec2(16.0, 16.0));
+        let gear_response = ui
+            .interact(gear, ui.scope_id().with("detection-settings"), Sense::click())
+            .on_hover_text("Gap, anticipation et post");
+        gear_response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Réglages de la détection"));
+        paint_gear(ui.painter(), gear.center(), if gear_response.hovered() { Color32::WHITE } else { NAME });
+        egui::Popup::from_toggle_button_response(&gear_response)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| self.detection_controls(ui));
 
-        let tracks = self.track_names().len() + 1;
-        child.add_space(4.0);
-        child
-            .toggle_value(&mut self.tracks.loudness, egui::RichText::new("Loudness").size(10.0))
-            .on_hover_text("Affiche ou masque les courbes de loudness sur le spectre et les repères du mixeur");
-        if rect.height() >= AUDIO_TITLE_HEIGHT + tracks as f32 * TRACK_ROW_HEIGHT + TARGETS_ROOM {
-            self.target_controls(&mut child);
+        let slider = Rect::from_min_size(Pos2::new(inner.left(), row.bottom() + 6.0), egui::vec2(inner.width(), 28.0));
+        self.sensitivity_box(ui, slider);
+    }
+
+    /// La sensibilité : une case avec son nom, sa valeur et une glissière.
+    fn sensitivity_box(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        let Some(media) = &self.media else { return };
+        let enabled = !media.project.scores.is_empty();
+        let mut settings = media.project.settings.clone();
+        let sense = if enabled { Sense::click_and_drag() } else { Sense::hover() };
+        let response = ui.interact(rect, ui.scope_id().with("sensitivity"), sense).on_hover_text(crate::SENSITIVITY_HELP);
+        let track = Rect::from_min_max(Pos2::new(rect.left() + 10.0, rect.bottom() - 6.0), Pos2::new(rect.right() - 10.0, rect.bottom() - 4.0));
+        let (low, high) = (10.0, 100.0);
+        let mut changed = false;
+        if response.dragged() || response.clicked() {
+            if let Some(pointer) = response.interact_pointer_pos() {
+                let share = ((pointer.x - track.left()) / track.width()).clamp(0.0, 1.0) as f64;
+                let value = (low + share * (high - low)).round();
+                if value != settings.sensitivity {
+                    settings.sensitivity = value;
+                    changed = true;
+                }
+            }
+        }
+        let value = settings.sensitivity;
+        response.widget_info(|| egui::WidgetInfo::slider(enabled, value, "Sensibilité"));
+        let painter = ui.painter();
+        let color = if enabled { NAME } else { WEAK };
+        painter.rect_stroke(rect, 4.0, Stroke::new(1.0, CELL_LINE), egui::StrokeKind::Inside);
+        let text_y = rect.top() + 10.0;
+        painter.text(Pos2::new(rect.left() + 10.0, text_y), Align2::LEFT_CENTER, "Sensibilité", FontId::proportional(FONT_SIZE), color);
+        painter.text(Pos2::new(rect.right() - 10.0, text_y), Align2::RIGHT_CENTER, format!("{value:.0}"), FontId::proportional(FONT_SIZE), color);
+        painter.rect_filled(track, 1.0, Color32::from_gray(62));
+        let x = track.left() + ((value - low) / (high - low)).clamp(0.0, 1.0) as f32 * track.width();
+        let handle = Rect::from_center_size(Pos2::new(x, track.center().y), egui::vec2(3.0, 9.0));
+        painter.rect_filled(handle, 1.5, if enabled { Color32::WHITE } else { WEAK });
+        let released = response.drag_stopped() || response.clicked();
+        self.apply_detection_settings(settings, changed, released);
+    }
+
+    /// Le tableau des pistes (afficher, solo, mute), la loudness et ses cibles, la vue.
+    fn audio_header(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        let inner = rect.shrink2(egui::vec2(PAD, 0.0));
+        section_title(ui, Pos2::new(inner.left(), rect.top() + 15.0), "Audio").on_hover_text(
+            "Loudness mesurée en BS.1770 (LKFS), sur toute la vidéo. Bleu : intégrée depuis le début, rouge hors \
+             de la cible. Blanc : short-term 3 s. Gris : momentary 400 ms. Sa graduation (-60 à 0) lui est propre.",
+        );
+
+        // Tout en bas, quelle que soit la hauteur : la vue, et juste au-dessus ce qui ne vaut que pour l'onde
+        let selector = Rect::from_min_max(
+            Pos2::new(inner.left(), rect.bottom() - PAD - CONTROL_HEIGHT),
+            Pos2::new(inner.right(), rect.bottom() - PAD),
+        );
+        let items = [
+            ("Spectre", self.tracks.view == AudioView::Spectrum, "Afficher le spectre (V)"),
+            ("Onde", self.tracks.view == AudioView::Waveform, "Afficher l'onde (V)"),
+        ];
+        match segmented(ui, selector, &items, 0.0, "audio-view") {
+            Some(0) => self.tracks.view = AudioView::Spectrum,
+            Some(1) => self.tracks.view = AudioView::Waveform,
+            _ => {}
+        }
+        let mut floor = selector.top() - 8.0;
+        if self.tracks.view == AudioView::Waveform {
+            let row = Rect::from_min_max(Pos2::new(inner.left(), selector.top() - 24.0), Pos2::new(inner.right(), selector.top() - 4.0));
+            let help = "Amplifie l'onde pour que la crête du mix remplisse la hauteur. Le même gain s'applique à chaque piste : les écarts entre elles restent justes.";
+            if switch_row(ui, row, "Normaliser", self.waveform_normalized, help).clicked() {
+                self.waveform_normalized = !self.waveform_normalized;
+            }
+            floor = row.top() - 8.0;
         }
 
         let names = self.track_names();
-        let lanes = self.lanes(self.tracks.audio_channels);
-        let lane_height = rect.height() / lanes.len() as f32;
-        for (lane, &channel) in lanes.iter().enumerate() {
-            // Le mix n'est pas un canal : il n'a ni solo ni mute
-            if channel == 0 {
-                continue;
+        let tracks: Vec<&str> = std::iter::once("Mix").chain(names.iter().map(String::as_str)).collect();
+        let table_top = rect.top() + 30.0;
+        let room = floor - table_top - SWITCH_GAP - SWITCH_HEIGHT;
+        let row_height = (room / tracks.len() as f32).clamp(15.0, CELL_HEIGHT);
+        let table = Rect::from_min_size(Pos2::new(inner.left(), table_top), egui::vec2(inner.width(), row_height * tracks.len() as f32));
+        self.track_table(ui, table, &tracks, row_height);
+
+        let loudness = Rect::from_min_size(Pos2::new(inner.left(), table.bottom() + SWITCH_GAP), egui::vec2(inner.width(), SWITCH_HEIGHT));
+        let help = "Affiche ou masque les courbes de loudness sur le spectre et les repères du mixeur";
+        if switch_row(ui, loudness, "Loudness", self.tracks.loudness, help).clicked() {
+            self.tracks.loudness = !self.tracks.loudness;
+        }
+        let targets_top = loudness.bottom() + 4.0;
+        if floor - targets_top >= TARGET_LABEL_HEIGHT + 3.0 * TARGET_ROW_HEIGHT {
+            self.target_controls(ui, Rect::from_min_size(Pos2::new(inner.left(), targets_top), egui::vec2(inner.width(), 0.0)));
+        }
+    }
+
+    /// Une ligne par piste : nom et œil pour l'afficher, puis solo et mute du canal.
+    fn track_table(&mut self, ui: &mut egui::Ui, table: Rect, tracks: &[&str], row_height: f32) {
+        let painter = ui.painter().clone();
+        let mute_left = table.right() - TOGGLE_CELL;
+        let solo_left = mute_left - TOGGLE_CELL;
+        let eye_left = solo_left - TOGGLE_CELL;
+        painter.rect_stroke(table, 3.0, Stroke::new(1.0, CELL_LINE), egui::StrokeKind::Inside);
+        for x in [eye_left, solo_left, mute_left] {
+            painter.line_segment([Pos2::new(x, table.top()), Pos2::new(x, table.bottom())], Stroke::new(1.0, CELL_LINE));
+        }
+        let shown = self.lanes(self.tracks.audio_channels).len();
+        for (track, &name) in tracks.iter().enumerate() {
+            let top = table.top() + track as f32 * row_height;
+            let row = Rect::from_min_max(Pos2::new(table.left(), top), Pos2::new(table.right(), top + row_height));
+            if track > 0 {
+                painter.line_segment([row.left_top(), row.right_top()], Stroke::new(1.0, CELL_LINE));
             }
-            let source = channel - 1;
-            let name = names.get(source).map_or("", |n| n.as_str());
-            let top = rect.top() + lane as f32 * lane_height;
-            let cell = Rect::from_min_max(
-                Pos2::new(rect.left() + AUDIO_CONTROLS_WIDTH, top),
-                Pos2::new(rect.right(), top + lane_height.max(16.0)),
+            let full_name = track_full_name(name);
+            let visible = self.tracks.audio_channels.is_visible(track);
+            // La dernière piste affichée reste : une zone vide ne servirait à rien
+            let only = visible && shown == 1;
+            let toggle = Rect::from_min_max(row.min, Pos2::new(solo_left, row.bottom()));
+            let sense = if only { Sense::hover() } else { Sense::click() };
+            let response = ui.interact(toggle, ui.scope_id().with(("track-visible", track)), sense);
+            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, !only, visible, full_name));
+            let response = if only {
+                response.on_hover_text("Au moins une piste reste affichée")
+            } else {
+                response.on_hover_text("Afficher ou masquer cette piste")
+            };
+            if response.hovered() && !only {
+                painter.rect_filled(toggle.shrink(1.0), 2.0, Color32::from_white_alpha(8));
+            }
+            painter.text(
+                Pos2::new(row.left() + 10.0, row.center().y),
+                Align2::LEFT_CENTER,
+                full_name,
+                FontId::proportional(FONT_SIZE),
+                NAME,
             );
-            let mut row = ui.new_child(egui::UiBuilder::new().max_rect(cell).layout(egui::Layout::left_to_right(egui::Align::Min)));
-            row.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
-            row.spacing_mut().button_padding = egui::vec2(2.0, 0.0);
-            row.add_sized([22.0, 15.0], egui::Label::new(egui::RichText::new(name).size(10.0).color(TEXT)));
-            let button = |text: &str, on: bool, color: Color32| channel_button(text, on, color).min_size(egui::vec2(17.0, 15.0));
-            if row
-                .add(button("S", self.monitor.is_solo(source), SOLO))
-                .on_hover_text(format!("Solo {name}"))
-                .clicked()
-            {
-                self.monitor.toggle_solo(source);
+            let eye = Pos2::new(eye_left + TOGGLE_CELL / 2.0, row.center().y);
+            paint_eye(&painter, eye, if visible { Color32::WHITE } else { Color32::from_gray(105) });
+            if response.clicked() {
+                self.tracks.audio_channels.set(track, !visible);
             }
-            if row
-                .add(button("M", self.monitor.is_muted(source), MUTE))
-                .on_hover_text(format!("Mute {name}"))
-                .clicked()
-            {
-                self.monitor.toggle_mute(source);
+
+            for (left, letter, color) in [(solo_left, "S", SOLO), (mute_left, "M", MUTE)] {
+                let cell = Rect::from_min_max(Pos2::new(left, row.top()), Pos2::new(left + TOGGLE_CELL, row.bottom()));
+                // Le mix n'est pas un canal : il n'a ni solo ni mute
+                if track == 0 {
+                    painter.text(cell.center(), Align2::CENTER_CENTER, letter, FontId::proportional(FONT_SIZE), Color32::from_gray(80));
+                    continue;
+                }
+                let source = track - 1;
+                let on = if letter == "S" { self.monitor.is_solo(source) } else { self.monitor.is_muted(source) };
+                let response = ui
+                    .interact(cell, ui.scope_id().with((letter, source)), Sense::click())
+                    .on_hover_text(format!("{} {name}", if letter == "S" { "Solo" } else { "Mute" }));
+                response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, letter));
+                if on {
+                    painter.rect_filled(cell.shrink(1.5), 2.0, color);
+                } else if response.hovered() {
+                    painter.rect_filled(cell.shrink(1.0), 2.0, Color32::from_white_alpha(10));
+                }
+                let text = if on { Color32::BLACK } else { NAME };
+                painter.text(cell.center(), Align2::CENTER_CENTER, letter, FontId::proportional(FONT_SIZE), text);
+                if response.clicked() {
+                    if letter == "S" {
+                        self.monitor.toggle_solo(source);
+                    } else {
+                        self.monitor.toggle_mute(source);
+                    }
+                }
             }
         }
     }
 
     /// Les cibles : la courbe et les valeurs passent au rouge en dehors.
-    fn target_controls(&mut self, ui: &mut egui::Ui) {
+    fn target_controls(&mut self, ui: &mut egui::Ui, area: Rect) {
         let enabled = self.tracks.loudness;
         let Some(media) = &mut self.media else { return };
         let mut target = media.project.loudness_target;
-        ui.add_enabled_ui(enabled, |ui| {
-            ui.label(egui::RichText::new("Cible").size(10.0).color(TEXT));
-            ui.style_mut().override_font_id = Some(FontId::proportional(10.0));
-            let row = |ui: &mut egui::Ui, name: &str, help: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>| {
-                ui.horizontal(|ui| {
-                    let label = left_label(ui, 46.0, egui::RichText::new(name).size(10.0).color(WEAK));
-                    ui.add_sized([VALUE_WIDTH, 14.0], egui::DragValue::new(value).range(range).speed(0.1).fixed_decimals(1))
-                        .labelled_by(label.id)
-                        .on_hover_text(help);
-                });
-            };
-            row(ui, "True peak", "Crête vraie à ne pas dépasser, en dBTP", &mut target.true_peak, -24.0..=0.0);
-            row(ui, "Intégrée", "Loudness intégrée visée, en LKFS", &mut target.integrated, -50.0..=-5.0);
-            row(ui, "Tolérance", "Écart accepté autour de l'intégrée, en LU", &mut target.tolerance, 0.1..=10.0);
-        });
+        let label = Rect::from_min_size(area.min, egui::vec2(area.width(), TARGET_LABEL_HEIGHT));
+        put_left(ui, label, egui::Label::new(egui::RichText::new("Cible").size(FONT_SIZE).color(WEAK)).selectable(false));
+        let table = Rect::from_min_size(Pos2::new(area.left(), label.bottom()), egui::vec2(area.width(), 3.0 * TARGET_ROW_HEIGHT));
+        let painter = ui.painter().clone();
+        painter.rect_stroke(table, 3.0, Stroke::new(1.0, CELL_LINE), egui::StrokeKind::Inside);
+        let value_left = table.right() - TARGET_VALUE_WIDTH;
+        let rows: [(&str, &str, &mut f32, std::ops::RangeInclusive<f32>); 3] = [
+            ("True peak (dB)", "Crête vraie à ne pas dépasser, en dBTP", &mut target.true_peak, -24.0..=0.0),
+            ("Intégrée (LKFS)", "Loudness intégrée visée, en LKFS", &mut target.integrated, -50.0..=-5.0),
+            ("Tolérance (LU)", "Écart accepté autour de l'intégrée, en LU", &mut target.tolerance, 0.1..=10.0),
+        ];
+        for (index, (name, help, value, range)) in rows.into_iter().enumerate() {
+            let top = table.top() + index as f32 * TARGET_ROW_HEIGHT;
+            let row = Rect::from_min_max(Pos2::new(table.left(), top), Pos2::new(table.right(), top + TARGET_ROW_HEIGHT));
+            if index > 0 {
+                painter.line_segment([row.left_top(), row.right_top()], Stroke::new(1.0, CELL_LINE));
+            }
+            let cell = Rect::from_min_max(Pos2::new(value_left, row.top()), row.max).shrink(1.0);
+            painter.rect_filled(cell, 2.0, CELL_FILL);
+            let name_rect = Rect::from_min_max(Pos2::new(row.left() + 10.0, row.top()), Pos2::new(value_left - 4.0, row.bottom()));
+            let color = if enabled { NAME } else { WEAK };
+            let label = put_left(ui, name_rect, egui::Label::new(egui::RichText::new(name).size(FONT_SIZE).color(color)).selectable(false).truncate());
+            let mut cell_ui = ui.new_child(egui::UiBuilder::new().max_rect(cell));
+            cell_ui.add_enabled_ui(enabled, |ui| {
+                let visuals = &mut ui.visuals_mut().widgets;
+                for state in [&mut visuals.inactive, &mut visuals.hovered, &mut visuals.active] {
+                    state.weak_bg_fill = CELL_FILL;
+                    state.bg_fill = CELL_FILL;
+                    state.bg_stroke = Stroke::NONE;
+                    state.corner_radius = egui::CornerRadius::same(2);
+                }
+                ui.style_mut().override_font_id = Some(FontId::proportional(FONT_SIZE));
+                ui.spacing_mut().button_padding = egui::vec2(1.0, 0.0);
+                ui.add_sized(cell.size(), egui::DragValue::new(value).range(range).speed(0.1).fixed_decimals(1))
+                    .labelled_by(label.id)
+                    .on_hover_text(help);
+            });
+        }
         if target != media.project.loudness_target {
             media.project.loudness_target = target;
             media.mark_changed();
@@ -1220,34 +1389,6 @@ impl App {
                     ui.end_row();
                 }
             });
-        });
-    }
-
-    /// Toutes les pistes, l'une sous l'autre, chacune à afficher ou masquer.
-    fn channel_controls(&mut self, ui: &mut egui::Ui) {
-        let names = self.track_names();
-        if names.is_empty() {
-            return;
-        }
-        let shown = self.lanes(self.tracks.audio_channels).len();
-        ui.scope(|ui| {
-            ui.spacing_mut().interact_size.y = TRACK_ROW_HEIGHT - 2.0;
-            ui.spacing_mut().icon_width = 12.0;
-            ui.spacing_mut().icon_spacing = 4.0;
-            for (track, name) in std::iter::once("Mix").chain(names.iter().map(String::as_str)).enumerate() {
-                let channels = &mut self.tracks.audio_channels;
-                let mut visible = channels.is_visible(track);
-                // La dernière piste affichée reste : une zone vide ne servirait à rien
-                let only = visible && shown == 1;
-                let checkbox = egui::Checkbox::new(&mut visible, egui::RichText::new(track_full_name(name)).size(10.5));
-                let response = ui
-                    .add_enabled(!only, checkbox)
-                    .on_hover_text("Afficher ou masquer cette piste")
-                    .on_disabled_hover_text("Au moins une piste reste affichée");
-                if response.changed() {
-                    channels.set(track, visible);
-                }
-            }
         });
     }
 
@@ -1651,6 +1792,9 @@ impl App {
 
     fn paint_music(&self, painter: &egui::Painter, rect: Rect) {
         let Some(media) = &self.media else { return };
+        if !self.tracks.music_curve {
+            return;
+        }
         let curve = &media.smoothed;
         // Échelle logarithmique : le seuil se joue dans les faibles probabilités
         let y = |p: f64| rect.bottom() - ((p.max(0.001).log10() + 3.0) / 3.0) as f32 * rect.height();
@@ -1923,39 +2067,6 @@ impl App {
 }
 
 /// Une valeur de loudness, ou un tiret quand il n'y a rien à mesurer.
-/// Sélecteur spectre / onde : une pilule, le choix actif en surbrillance.
-fn view_selector(ui: &mut egui::Ui, rect: Rect, view: &mut AudioView) {
-    let visuals = ui.visuals().clone();
-    let radius = rect.height() / 2.0;
-    ui.painter().rect_filled(rect, radius, visuals.widgets.inactive.weak_bg_fill);
-    let options = [
-        (AudioView::Spectrum, "Spectre", "Afficher le spectre (V)"),
-        (AudioView::Waveform, "Onde", "Afficher l'onde (V)"),
-    ];
-    let width = rect.width() / options.len() as f32;
-    for (index, (option, name, help)) in options.into_iter().enumerate() {
-        let left = rect.left() + index as f32 * width;
-        let cell = Rect::from_min_size(Pos2::new(left, rect.top()), egui::vec2(width, rect.height()));
-        let response = ui.interact(cell, ui.scope_id().with(("audio-view", index)), Sense::click()).on_hover_text(help);
-        let active = *view == option;
-        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, name));
-        let color = if active {
-            ui.painter().rect_filled(cell.shrink(1.0), radius - 1.0, visuals.selection.bg_fill);
-            visuals.selection.stroke.color
-        } else if response.hovered() {
-            Color32::WHITE
-        } else {
-            TEXT
-        };
-        let galley = ui.painter().layout_no_wrap(name.to_string(), FontId::proportional(10.5), color);
-        let x = cell.center().x - galley.size().x / 2.0;
-        ui.painter().galley(Pos2::new(x, cell.center().y - galley.size().y / 2.0), galley, color);
-        if response.clicked() {
-            *view = option;
-        }
-    }
-}
-
 /// Une courbe par colonne de pixels, sans marches ni dents : interpolée au zoom, puis adoucie
 /// sur une largeur qui suit le pas des mesures. L'affichage seul change, pas la détection.
 fn smooth_curve(curve: &[f64], step: f64, view: View, width: usize) -> Vec<f64> {
@@ -1994,7 +2105,7 @@ fn smooth_curve(curve: &[f64], step: f64, view: View, width: usize) -> Vec<f64> 
     out
 }
 
-/// Bouton S ou M, plein quand il est actif.
+/// Bouton S ou M du mixeur, plein quand il est actif.
 fn channel_button(text: &str, on: bool, color: Color32) -> egui::Button<'static> {
     let label = egui::RichText::new(text.to_string()).size(10.0).color(if on { Color32::BLACK } else { TEXT });
     let button = egui::Button::new(label);
@@ -2003,6 +2114,108 @@ fn channel_button(text: &str, on: bool, color: Color32) -> egui::Button<'static>
     } else {
         button
     }
+}
+
+/// Un widget dans `rect`, aligné à gauche et centré verticalement (`ui.put` le centrerait).
+fn put_left(ui: &mut egui::Ui, rect: Rect, widget: impl egui::Widget) -> egui::Response {
+    let layout = egui::Layout::left_to_right(egui::Align::Center);
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(layout), |ui| ui.add(widget)).inner
+}
+
+/// Titre de section en capitales, centré verticalement sur `at`.
+fn section_title(ui: &mut egui::Ui, at: Pos2, text: &str) -> egui::Response {
+    // Inter Medium, si les polices de l'app sont chargées (pas dans les tests)
+    let medium = egui::FontFamily::Name("medium".into());
+    let loaded = ui.ctx().fonts(|fonts| fonts.definitions().families.get(&medium).is_some_and(|f| !f.is_empty()));
+    let rich = egui::RichText::new(text.to_uppercase()).size(FONT_SIZE).color(TITLE);
+    let rich = if loaded { rich.family(medium) } else { rich.strong() };
+    let rect = Rect::from_min_max(Pos2::new(at.x, at.y - 9.0), Pos2::new(at.x + 150.0, at.y + 9.0));
+    put_left(ui, rect, egui::Label::new(rich).selectable(false))
+}
+
+/// Boutons côte à côte. Avec un écart : chacun son cadre ; sans : un cadre commun.
+/// Retourne celui qu'on a cliqué.
+fn segmented(ui: &mut egui::Ui, rect: Rect, items: &[(&str, bool, &str)], gap: f32, id: &str) -> Option<usize> {
+    let painter = ui.painter().clone();
+    let count = items.len() as f32;
+    let width = (rect.width() - gap * (count - 1.0)) / count;
+    if gap == 0.0 {
+        painter.rect_stroke(rect, 4.0, Stroke::new(1.0, CELL_LINE), egui::StrokeKind::Inside);
+    }
+    let mut clicked = None;
+    for (index, &(name, selected, help)) in items.iter().enumerate() {
+        let cell = Rect::from_min_size(
+            Pos2::new(rect.left() + index as f32 * (width + gap), rect.top()),
+            egui::vec2(width, rect.height()),
+        );
+        let response = ui.interact(cell, ui.scope_id().with((id, index)), Sense::click()).on_hover_text(help);
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, name));
+        let fill = if gap == 0.0 { cell.shrink(2.0) } else { cell };
+        if selected {
+            painter.rect_filled(fill, 4.0, SELECTED_FILL);
+        } else {
+            if gap > 0.0 {
+                painter.rect_stroke(cell, 4.0, Stroke::new(1.0, CELL_LINE), egui::StrokeKind::Inside);
+            }
+            if response.hovered() {
+                painter.rect_filled(fill, 4.0, Color32::from_white_alpha(8));
+            }
+        }
+        let color = if selected || response.hovered() { Color32::WHITE } else { TEXT };
+        painter.text(cell.center(), Align2::CENTER_CENTER, name, FontId::proportional(FONT_SIZE), color);
+        if response.clicked() {
+            clicked = Some(index);
+        }
+    }
+    clicked
+}
+
+/// Un nom à gauche, un interrupteur à droite ; toute la ligne réagit au clic.
+fn switch_row(ui: &mut egui::Ui, rect: Rect, label: &str, on: bool, help: &str) -> egui::Response {
+    let response = ui.interact(rect, ui.scope_id().with(("switch", label)), Sense::click()).on_hover_text(help);
+    let enabled = ui.is_enabled();
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, on, label));
+    let painter = ui.painter();
+    let color = if enabled { NAME } else { WEAK };
+    painter.text(Pos2::new(rect.left(), rect.center().y), Align2::LEFT_CENTER, label, FontId::proportional(FONT_SIZE), color);
+    let track = Rect::from_center_size(Pos2::new(rect.right() - 12.0, rect.center().y), egui::vec2(24.0, 14.0));
+    let hovered = response.hovered();
+    let track_color = match (on, hovered) {
+        (true, false) => Color32::from_rgb(78, 80, 87),
+        (true, true) => Color32::from_rgb(92, 94, 101),
+        (false, false) => Color32::from_rgb(42, 44, 49),
+        (false, true) => Color32::from_rgb(54, 56, 62),
+    };
+    painter.rect_filled(track, 7.0, track_color);
+    let knob_x = if on { track.right() - 7.0 } else { track.left() + 7.0 };
+    let knob = Rect::from_center_size(Pos2::new(knob_x, track.center().y), egui::vec2(10.0, 10.0));
+    painter.rect_filled(knob, 3.0, if on { Color32::WHITE } else { Color32::from_gray(135) });
+    response
+}
+
+/// Œil : la piste est affichée quand il est blanc.
+fn paint_eye(painter: &egui::Painter, center: Pos2, color: Color32) {
+    const STEPS: usize = 14;
+    let (half_width, half_height) = (6.5, 4.2);
+    let point = |t: f32, side: f32| {
+        Pos2::new(center.x - half_width + 2.0 * half_width * t, center.y + side * half_height * (std::f32::consts::PI * t).sin())
+    };
+    let mut outline: Vec<Pos2> = (0..=STEPS).map(|i| point(i as f32 / STEPS as f32, -1.0)).collect();
+    outline.extend((1..STEPS).rev().map(|i| point(i as f32 / STEPS as f32, 1.0)));
+    painter.add(Shape::convex_polygon(outline, color, Stroke::NONE));
+    painter.circle_filled(center, 2.4, BG);
+    painter.circle_filled(center, 1.1, color);
+}
+
+/// Engrenage des réglages de la détection.
+fn paint_gear(painter: &egui::Painter, center: Pos2, color: Color32) {
+    for tooth in 0..8 {
+        let angle = tooth as f32 * std::f32::consts::TAU / 8.0;
+        let direction = egui::vec2(angle.cos(), angle.sin());
+        painter.line_segment([center + direction * 3.5, center + direction * 6.2], Stroke::new(2.4, color));
+    }
+    painter.circle_filled(center, 4.6, color);
+    painter.circle_filled(center, 1.9, BG);
 }
 
 /// Couleur du dégradé pour un niveau.
