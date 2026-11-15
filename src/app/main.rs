@@ -2777,7 +2777,7 @@ mod tests {
         harness.step();
         harness.step();
         harness.get_by_label("Aucun projet récent");
-        harness.state_mut().recent.add(Path::new("Z:\\absent\\Disparu.mp4"));
+        harness.state_mut().recent.add(Path::new("Z://absent//Disparu.mp4"));
         harness.step();
         harness.step();
         assert_eq!(harness.query_all_by_label("Aucun projet récent").count(), 0);

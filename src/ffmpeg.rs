@@ -1,7 +1,9 @@
 //! ffmpeg : sous Windows, embarqué et extrait une fois dans le dossier local de l'utilisateur ;
 //! ailleurs, livré à côté de l'exécutable ou installé sur le système.
 
-use std::io::{self, Read};
+#[cfg(windows)]
+use std::io;
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;

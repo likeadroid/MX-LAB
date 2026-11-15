@@ -480,11 +480,11 @@ mod tests {
 
     #[test]
     fn export_folder_follows_the_chosen_destination() {
-        let video = Path::new("Z:\\absent\\Mon film.mkv");
-        assert_eq!(export_folder(video, None), Path::new("Z:\\absent\\music-sequences"));
+        let video = Path::new("Z://absent//Mon film.mkv");
+        assert_eq!(export_folder(video, None), Path::new("Z://absent//music-sequences"));
         assert_eq!(
-            export_folder(video, Some(Path::new("Z:\\clips"))),
-            Path::new("Z:\\clips\\music-sequences - Mon film")
+            export_folder(video, Some(Path::new("Z://clips"))),
+            Path::new("Z://clips//music-sequences - Mon film")
         );
     }
 

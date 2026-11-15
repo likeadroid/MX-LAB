@@ -475,7 +475,7 @@ mod tests {
 
     #[test]
     fn episode_without_a_title_takes_it_from_its_folder() {
-        let path = Path::new("D:\\Séries\\Silicon Valley (2014)\\S02E10 - Be All You Can Be.mkv");
+        let path = Path::new("D://Séries//Silicon Valley (2014)//S02E10 - Be All You Can Be.mkv");
         let info = describe(path);
         assert_eq!(info.title, "Silicon Valley");
         assert_eq!(info.year.as_deref(), Some("2014"));
@@ -484,7 +484,7 @@ mod tests {
 
     #[test]
     fn no_information_gives_only_what_exists() {
-        let rows = describe(Path::new("D:\\S01E02.mkv")).rows();
+        let rows = describe(Path::new("D://S01E02.mkv")).rows();
         assert!(!rows.iter().any(|r| r.0 == "Épisode"), "la fiche garde titre, année et source");
         assert!(!rows.iter().any(|r| r.0 == "Source" || r.0 == "Année"));
         let rows = describe(Path::new("Mon film.mkv")).rows();

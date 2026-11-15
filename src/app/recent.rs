@@ -81,13 +81,13 @@ mod tests {
     fn latest_comes_first_without_duplicates_and_stays_bounded() {
         let mut recent = RecentProjects::default();
         for index in 0..15 {
-            recent.add(Path::new(&format!("C:\\films\\{index}.mkv")));
+            recent.add(Path::new(&format!("C:/films/{index}.mkv")));
         }
         assert_eq!(recent.paths().len(), MAX_RECENT);
-        assert_eq!(recent.paths()[0], Path::new("C:\\films\\14.mkv"));
-        recent.add(Path::new("c:\\FILMS\\10.MKV"));
+        assert_eq!(recent.paths()[0], Path::new("C://films//14.mkv"));
+        recent.add(Path::new("c://FILMS//10.MKV"));
         assert_eq!(recent.paths().len(), MAX_RECENT);
-        assert_eq!(recent.paths()[0], Path::new("c:\\FILMS\\10.MKV"));
+        assert_eq!(recent.paths()[0], Path::new("c://FILMS//10.MKV"));
     }
 
     #[test]
@@ -95,9 +95,9 @@ mod tests {
         let folder = std::env::temp_dir().join(format!("music-studio-recent-{}", std::process::id()));
         let file = folder.join("recent.json");
         let mut recent = RecentProjects::load_from(file.clone());
-        recent.add(Path::new("E:\\Vidéos\\Thème d'été.mp4"));
+        recent.add(Path::new("E://Vidéos//Thème d'été.mp4"));
         let mut reopened = RecentProjects::load_from(file.clone());
-        assert_eq!(reopened.paths(), [PathBuf::from("E:\\Vidéos\\Thème d'été.mp4")]);
+        assert_eq!(reopened.paths(), [PathBuf::from("E://Vidéos//Thème d'été.mp4")]);
         reopened.clear();
         assert!(RecentProjects::load_from(file).paths().is_empty());
         let _ = std::fs::remove_dir_all(folder);
@@ -105,8 +105,8 @@ mod tests {
 
     #[test]
     fn long_names_are_shortened_in_the_menu() {
-        assert_eq!(label(Path::new("E:\\Film\\Court.mkv")), "Court");
-        let long = format!("E:\\Film\\{}.mkv", "a".repeat(90));
+        assert_eq!(label(Path::new("E://Film//Court.mkv")), "Court");
+        let long = format!("E://Film//{}.mkv", "a".repeat(90));
         let shown = label(Path::new(&long));
         assert_eq!(shown.chars().count(), MAX_LABEL_CHARS);
         assert!(shown.ends_with('…'));

@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn touching_sequences_merge_and_keep_their_texts() {
-        let mut project = Project::new(Path::new("C:\\films\\film.mkv"));
+        let mut project = Project::new(Path::new("C://films//film.mkv"));
         project.duration = 100.0;
         project.apply_detection(&[(10.0, 20.0), (30.0, 40.0), (60.0, 70.0)]);
         let (a, b) = (project.segments[0].id, project.segments[1].id);
@@ -340,7 +340,7 @@ mod tests {
     }
 
     fn project() -> Project {
-        let mut project = Project::new(Path::new("C:\\films\\film.mkv"));
+        let mut project = Project::new(Path::new("C://films//film.mkv"));
         project.duration = 100.0;
         project.apply_detection(&[(10.0, 20.0), (30.0, 40.0), (50.0, 60.0)]);
         project
@@ -349,8 +349,8 @@ mod tests {
     #[test]
     fn project_file_sits_next_to_the_video() {
         assert_eq!(
-            project_path(Path::new("C:\\films\\Mon.Film.2024.mkv")),
-            Path::new("C:\\films\\Mon.Film.2024.mx-lab.json")
+            project_path(Path::new("C://films//Mon.Film.2024.mkv")),
+            Path::new("C://films//Mon.Film.2024.mx-lab.json")
         );
     }
 
