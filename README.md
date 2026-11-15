@@ -10,30 +10,31 @@ Logiciel pour étudier la musique d'un film à l'image : timeline de la vidéo, 
 - **Séquences** : tableau modifiable (bornes, mesures, mood, ensemble, instruments), notes, export sans perte calé sur les keyframes (FFmpeg)
 - **Projet** `<vidéo>.mx-lab.json` enregistré à côté de la vidéo
 
+## Installer
+Prêt à l'emploi, sans rien installer d'autre : ffmpeg et libmpv sont livrés avec l'app.
+
+- **macOS** (Apple Silicon, macOS 12 ou plus) : `MX-LAB-macOS.zip`, à décompresser, puis glisser `MX-LAB.app` dans Applications. L'app n'est pas signée par un compte développeur Apple : au premier lancement, clic droit > Ouvrir (ou Réglages Système > Confidentialité et sécurité > Ouvrir quand même).
+- **Linux** (x86_64 ; Ubuntu 24.04, Fedora 40 ou plus récent) : `MX-LAB-x86_64.AppImage`, à rendre exécutable puis lancer.
+
+Les paquets sont publiés dans les releases du dépôt, et fabriqués par la CI à chaque push (onglet Actions). Données locales : `%LOCALAPPDATA%\MX-LAB` (Windows), `~/Library/Application Support/MX-LAB` (macOS), `~/.local/share/mx-lab` (Linux).
+
 ## Compiler
-Rust et, sous Windows, les outils C++ de Visual Studio sont nécessaires. FFmpeg (`ffmpeg-min/ffmpeg.exe`) et libmpv (`vendor/libmpv/libmpv-2.dll`) ne sont pas dans le dépôt : ils sont à placer à ces endroits avant de compiler, puis sont intégrés à l'exe et extraits au premier lancement dans `%LOCALAPPDATA%\MX-LAB`.
+Avec Rust. `cargo build --profile studio-dev` pour itérer plus vite.
 
-```bash
-cargo build --release
-```
+**Windows** (outils C++ de Visual Studio requis) : FFmpeg (`ffmpeg-min/ffmpeg.exe`) et libmpv (`vendor/libmpv/libmpv-2.dll`) ne sont pas dans le dépôt. Placés à ces endroits avant de compiler, ils sont intégrés à `target/release/mx-lab.exe` et extraits au premier lancement.
 
-L'exe est créé dans `target/release/mx-lab.exe`. Pour itérer plus vite : `cargo build --profile studio-dev`.
-
-## macOS et Linux
-MX-LAB compile et passe ses tests sous macOS et Linux (voir la CI). FFmpeg et libmpv n'y sont pas intégrés à l'exécutable : ils sont cherchés à côté de lui, puis dans Homebrew et le système.
+**macOS et Linux** : ffmpeg et libmpv viennent du système pour développer, et sont copiés dans le paquet par `packaging/macos.sh` (dylibbundler) ou `packaging/linux.sh` (linuxdeploy). La vidéo y passe par le rendu logiciel de mpv.
 
 ```bash
 # macOS
-brew install ffmpeg mpv
-# Ubuntu / Debian
+brew install ffmpeg mpv dylibbundler
+cargo build --release && bash packaging/macos.sh
+# Ubuntu
 sudo apt install ffmpeg libmpv2
+cargo build --release && bash packaging/linux.sh
 ```
 
-```bash
-cargo build --release
-```
-
-La vidéo y passe par le rendu logiciel de mpv. Données locales : `~/Library/Application Support/MX-LAB` (macOS), `~/.local/share/mx-lab` (Linux). Pas encore de paquet `.app` ni d'AppImage.
+`mx-lab --self-check` vérifie que ffmpeg et libmpv livrés fonctionnent.
 
 ## Licence
 GPL-3.0, voir `LICENSE`.
