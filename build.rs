@@ -22,17 +22,32 @@ fn compress(source: &str, name: &str) {
     encoder.finish().unwrap();
 }
 
-include!("src/app/icon.rs");
+mod icon_render {
+    #![allow(dead_code)]
+    include!("src/icon_render.rs");
+}
+use icon_render::{render_svg, rgba};
+
+const SVG_PATH: &str = "assets/icon.svg";
+
+/// Icône de la fenêtre, en pixels bruts lus par l'app.
+fn window_icon() {
+    let svg = fs::read(SVG_PATH).unwrap();
+    let rgba = rgba(&render_svg(&svg, WINDOW_ICON_SIZE));
+    fs::write(Path::new(&env::var("OUT_DIR").unwrap()).join("window-icon.rgba"), rgba).unwrap();
+}
+
+const WINDOW_ICON_SIZE: u32 = 128;
 
 /// Écrit l'icône de MX-LAB (.ico) et la donne à son exe, sans toucher aux autres.
 fn studio_icon() {
-    println!("cargo:rerun-if-changed=src/app/icon.rs");
+    let svg = fs::read(SVG_PATH).unwrap();
     let folder = env::var("OUT_DIR").unwrap();
-    let sizes = [16u32, 32, 48, 256];
+    let sizes = [16u32, 24, 32, 48, 64, 256];
     let images: Vec<Vec<u8>> = sizes
         .iter()
         .map(|&size| {
-            let rgba = icon_rgba(size);
+            let rgba = rgba(&render_svg(&svg, size));
             let mut image = Vec::new();
             // En-tête BMP : hauteur doublée, avec le masque qui suit les pixels
             for value in [40u32, size, size * 2] {
@@ -74,6 +89,9 @@ fn studio_icon() {
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed={SVG_PATH}");
+    println!("cargo:rerun-if-changed=src/icon_render.rs");
+    window_icon();
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }

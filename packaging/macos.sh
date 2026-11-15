@@ -46,8 +46,8 @@ fi
 iconset="target/package/mx-lab.iconset"
 mkdir -p "$iconset"
 for size in 16 32 128 256 512; do
-  "$contents/MacOS/mx-lab" --icon-png "$size" "$iconset/icon_${size}x${size}.png"
-  "$contents/MacOS/mx-lab" --icon-png "$((size * 2))" "$iconset/icon_${size}x${size}@2x.png"
+  target/release/mx-lab-icons macos "$size" "$iconset/icon_${size}x${size}.png"
+  target/release/mx-lab-icons macos "$((size * 2))" "$iconset/icon_${size}x${size}@2x.png"
 done
 iconutil -c icns "$iconset" -o "$contents/Resources/mx-lab.icns"
 

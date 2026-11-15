@@ -4,7 +4,6 @@
 //! Timeline de la vidéo, détection de la musique, onde, spectre, loudness, lecteur précis,
 //! correction et export des séquences.
 
-mod icon;
 mod monitor;
 mod mpv;
 mod music_tags;
@@ -2704,7 +2703,11 @@ fn main() -> eframe::Result {
             .with_inner_size([1500.0, 950.0])
             .with_maximized(true)
             .with_min_inner_size([LEFT_PANEL_MIN + MIN_VIDEO_WIDTH + RIGHT_PANEL_MIN + 16.0, 650.0])
-            .with_icon(egui::IconData { rgba: icon::icon_rgba(64), width: 64, height: 64 })
+            .with_icon(egui::IconData {
+                rgba: include_bytes!(concat!(env!("OUT_DIR"), "/window-icon.rgba")).to_vec(),
+                width: 128,
+                height: 128,
+            })
             .with_drag_and_drop(true),
         ..Default::default()
     };

@@ -27,7 +27,7 @@ for name in libjack.so.0 libusb-1.0.so.0; do
   extra_libraries+=(--library "$path")
 done
 
-target/release/mx-lab --icon-png 256 target/package/mx-lab.png
+target/release/mx-lab-icons png 256 target/package/mx-lab.png
 
 export APPIMAGE_EXTRACT_AND_RUN=1
 export OUTPUT=MX-LAB-x86_64.AppImage

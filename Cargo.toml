@@ -12,9 +12,15 @@ path = "src/lib.rs"
 name = "mx-lab"
 path = "src/app/main.rs"
 
+# Icônes des paquets macOS et Linux
+[[bin]]
+name = "mx-lab-icons"
+path = "src/bin/mx-lab-icons.rs"
+
 [dependencies]
 eframe = { version = "0.37.0", default-features = false, features = ["glow", "wgpu", "default_fonts", "x11", "wayland"] }
 libloading = "0.8"
+resvg = { version = "0.45", default-features = false }
 rayon = "1.12.0"
 rfd = "0.17.2"
 rustfft = "6.4.1"
@@ -43,6 +49,7 @@ incremental = true
 
 [build-dependencies]
 embed-resource = "3"
+resvg = { version = "0.45", default-features = false }
 zstd = { version = "0.14.3", features = ["zstdmt"] }
 
 [dev-dependencies]
