@@ -1,4 +1,4 @@
-//! Lecteur vidéo : libmpv.
+﻿//! Lecteur vidéo : libmpv.
 //!
 //! mpv rend sur son propre fil ; chaque image est recopiée vers une texture egui, si bien que
 //! l'interface garde le moteur de son choix.
@@ -830,6 +830,73 @@ impl Drop for Player {
     }
 }
 
+/// Un second lecteur, sans image, pour faire entendre une note : une sinusoïde, sans clic
+/// au début ni à la fin. Il partage la bibliothèque du lecteur principal.
+pub struct Tone {
+    api: Arc<Api>,
+    handle: Handle,
+}
+
+/// Fréquence d'une hauteur MIDI (la 4 = 69 = 440 Hz).
+pub fn pitch_frequency(pitch: u8) -> f64 {
+    440.0 * 2f64.powf((pitch as f64 - 69.0) / 12.0)
+}
+
+impl Tone {
+    fn open(api: Arc<Api>, extra: &[(&CStr, &CStr)]) -> Result<Self, String> {
+        unsafe {
+            let handle = (api.create)();
+            if handle.is_null() {
+                return Err("libmpv : création impossible".into());
+            }
+            let options: [(&CStr, &CStr); 6] = [
+                (c"vo", c"null"),
+                (c"vid", c"no"),
+                (c"config", c"no"),
+                (c"load-scripts", c"no"),
+                (c"input-default-bindings", c"no"),
+                (c"idle", c"yes"),
+            ];
+            for (name, value) in options.iter().chain(extra) {
+                (api.set_option_string)(handle, name.as_ptr(), value.as_ptr());
+            }
+            if (api.initialize)(handle) < 0 {
+                (api.terminate_destroy)(handle);
+                return Err("libmpv : initialisation impossible".into());
+            }
+            Ok(Tone { api, handle })
+        }
+    }
+
+    /// Joue la hauteur pendant `seconds`, en remplaçant la note précédente.
+    pub fn play(&self, pitch: u8, seconds: f64) {
+        let seconds = seconds.clamp(0.15, 1.5);
+        let fade = 0.08_f64.min(seconds / 3.0);
+        let url = format!(
+            "av://lavfi:sine=frequency={:.3}:sample_rate=48000:duration={seconds:.3},\
+             afade=t=in:d=0.01,afade=t=out:st={:.3}:d={fade:.3},volume=0.3",
+            pitch_frequency(pitch),
+            seconds - fade,
+        );
+        let (load, url, replace) = (c"loadfile", CString::new(url).unwrap(), c"replace");
+        let args = [load.as_ptr(), url.as_ptr(), replace.as_ptr(), std::ptr::null()];
+        unsafe { (self.api.command)(self.handle, args.as_ptr()) };
+    }
+}
+
+impl Drop for Tone {
+    fn drop(&mut self) {
+        unsafe { (self.api.terminate_destroy)(self.handle) };
+    }
+}
+
+impl Player {
+    /// Le lecteur des notes jouées au clic.
+    pub fn tone(&self) -> Result<Tone, String> {
+        Tone::open(self.api.clone(), &[])
+    }
+}
+
 /// Texte de l'option `af`. Le graphe des faders contient des crochets : sa longueur annoncée
 /// (`%n%`) évite que mpv les prenne pour la fin de la valeur.
 fn audio_chain(faders: Option<&str>, filter: Option<&str>, boost: f64) -> String {
@@ -952,6 +1019,55 @@ mod tests {
             (values.iter().map(|v| v * v).sum::<f64>() / values.len() as f64).sqrt()
         };
         (rms(0), rms(1))
+    }
+
+    /// La note jouée au clic : la bonne fréquence, la bonne durée.
+    #[test]
+    fn tone_plays_the_pitch_of_the_note() {
+        assert!((pitch_frequency(69) - 440.0).abs() < 1e-9);
+        assert!((pitch_frequency(60) - 261.6256).abs() < 1e-3);
+        let folder = std::env::temp_dir().join(format!("mx-lab-tone-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let output = folder.join("tone.wav");
+        let output_text = CString::new(output.to_string_lossy().as_bytes()).unwrap();
+        let api = Arc::new(Api::load().unwrap());
+        let tone = Tone::open(
+            api.clone(),
+            &[
+                (c"ao", c"pcm"),
+                (c"audio-format", c"s16"),
+                (c"audio-channels", c"mono"),
+                (c"audio-samplerate", c"48000"),
+                (c"untimed", c"yes"),
+                (c"ao-pcm-file", output_text.as_c_str()),
+            ],
+        )
+        .unwrap();
+        tone.play(69, 0.5);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let event = unsafe { &*(api.wait_event)(tone.handle, 1.0) };
+            if event.id == EVENT_END_FILE {
+                break;
+            }
+            assert!(Instant::now() < deadline, "mpv n'a pas fini");
+        }
+        drop(tone);
+        let wav = std::fs::read(&output).unwrap();
+        let start = wav.windows(4).position(|w| w == b"data").expect("pas de son écrit") + 8;
+        let samples: Vec<f64> = wav[start..].chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]) as f64 / 32768.0).collect();
+        let seconds = samples.len() as f64 / 48000.0;
+        assert!((seconds - 0.5).abs() < 0.05, "{seconds} s");
+        // Fréquence par les passages à zéro, au milieu de la note
+        let middle = &samples[samples.len() / 4..samples.len() * 3 / 4];
+        let crossings = middle.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count();
+        let frequency = crossings as f64 / (middle.len() as f64 / 48000.0);
+        assert!((frequency - 440.0).abs() < 5.0, "{frequency} Hz");
+        // Ni clic au début ni à la fin : le son part et finit à zéro
+        let edge = |part: &[f64]| part.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        let (first, last) = (edge(&samples[..48]), edge(&samples[samples.len() - 48..]));
+        assert!(first < 0.05 && last < 0.05, "début {first:.3}, fin {last:.3}, max {:.3}", edge(&samples));
+        let _ = std::fs::remove_dir_all(folder);
     }
 
     /// Solo et mute appliqués en pleine lecture, sans relancer la chaîne, sur le son produit.

@@ -187,6 +187,13 @@ pub struct App {
     timeline_body: egui::Rect,
     /// Une séquence choisie remplit la timeline.
     auto_zoom: bool,
+    /// Zoom vertical de la piste MIDI (1 : toutes les notes), et la hauteur au milieu.
+    midi_zoom: f64,
+    midi_center: Option<f32>,
+    /// Lecteur des notes jouées au clic, ouvert au premier clic.
+    tone: Option<mpv::Tone>,
+    /// La dernière note jouée, allumée un instant.
+    played_note: Option<(mx_lab::transcribe::Note, Instant)>,
     last_scrub: Option<(f64, bool)>,
     resume_after_drag: bool,
     #[cfg(test)]
@@ -603,6 +610,10 @@ impl App {
             drag: Drag::None,
             timeline_body: egui::Rect::NOTHING,
             auto_zoom: false,
+            midi_zoom: 1.0,
+            midi_center: None,
+            tone: None,
+            played_note: None,
             last_scrub: None,
             resume_after_drag: false,
             #[cfg(test)]
@@ -4124,6 +4135,74 @@ mod tests {
         assert!(low <= 60 && high >= 67 && high - low >= 24, "{low} {high}");
         harness.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(body.left() + 100.0, (top + bottom) / 2.0)));
         harness.step();
+    }
+
+    #[test]
+    fn midi_zoom_scroll_and_a_click_on_a_note() {
+        let mut app = app();
+        let first = app.media.as_ref().unwrap().project.segments[0].clone();
+        let note = mx_lab::transcribe::Note { start: first.start + 10.0, end: first.start + 30.0, pitch: 60, velocity: 0.8 };
+        let notes = vec![note, mx_lab::transcribe::Note { pitch: 84, ..note }];
+        app.media.as_mut().unwrap().midi.insert(first.id, ((first.start, first.end), Arc::new(notes)));
+        let mut harness = harness(app);
+        harness.step();
+        let full = harness.state().midi_view();
+
+        // Zoom au maximum par la case : une octave visible
+        let zoom = harness.get_by_label("Zoom vertical").rect();
+        let at = egui::pos2(zoom.right() - 2.0, zoom.bottom() - 4.0);
+        harness.input_mut().events.push(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            harness.input_mut().events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        }
+        harness.step();
+        harness.step();
+        assert_eq!(harness.state().midi_zoom, 8.0);
+        let (low, high) = harness.state().midi_view();
+        assert_eq!(high - low, 12, "{full:?} → {low}-{high}");
+
+        // Alt + molette sur la piste : on monte dans les notes
+        let body = harness.state().timeline_body;
+        let rows = timeline::layout_rows(body.top(), body.height(), harness.state().tracks);
+        let (_, top, bottom) = *rows.iter().find(|r| r.0 == timeline::Row::Midi).unwrap();
+        let middle = egui::pos2(body.left() + 50.0, (top + bottom) / 2.0);
+        harness.input_mut().events.push(egui::Event::PointerMoved(middle));
+        harness.input_mut().events.push(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
+        harness.input_mut().events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, 120.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::ALT,
+            source: egui::MouseWheelSource::Wheel,
+        });
+        for _ in 0..20 {
+            harness.step();
+        }
+        harness.input_mut().events.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+        harness.step();
+        let (moved, _) = harness.state().midi_view();
+        assert!(moved > low, "{low} → {moved}");
+
+        // Retour au do 4, puis un clic sur sa note : elle est jouée, la lecture ne bouge pas
+        harness.state_mut().midi_center = Some(60.0);
+        harness.step();
+        let rect = egui::Rect::from_min_max(egui::pos2(body.left(), top), egui::pos2(body.right(), bottom));
+        let (low, high) = harness.state().midi_view();
+        let row = rect.height() / (high - low + 1) as f32;
+        let y = rect.bottom() - (60 - low) as f32 * row - row / 2.0;
+        let x = harness.state().view.x(rect.left(), rect.width(), note.start + 5.0);
+        let on_note = egui::pos2(x, y);
+        assert_eq!(harness.state().midi_note_at(rect, on_note), Some(note));
+        let before = harness.state().position();
+        harness.input_mut().events.push(egui::Event::PointerMoved(on_note));
+        harness.step();
+        for pressed in [true, false] {
+            harness.input_mut().events.push(egui::Event::PointerButton { pos: on_note, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            harness.step();
+        }
+        harness.step();
+        assert_eq!(harness.state().played_note.map(|(n, _)| n), Some(note));
+        assert_eq!(harness.state().position(), before, "jouer une note ne déplace pas la lecture");
     }
 
     #[test]

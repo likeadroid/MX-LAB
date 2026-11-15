@@ -588,10 +588,17 @@ impl App {
         let hover = response.hover_pos();
         let modifiers = ui.input(|i| i.modifiers);
 
-        // Molette : zoom autour du curseur ; Maj + molette : défilement
+        // Molette : zoom autour du curseur ; Maj + molette : défilement ;
+        // Alt + molette sur la piste MIDI : monter ou descendre dans les notes
         if let Some(pos) = hover {
             let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta()));
-            if pinch != 1.0 {
+            let midi_row = rows.iter().find(|r| r.0 == Row::Midi && pos.y >= r.1 && pos.y < r.2);
+            let alt_scroll = if scroll.y != 0.0 { scroll.y } else { scroll.x };
+            if let (Some(row), true, true) = (midi_row, modifiers.alt, alt_scroll != 0.0) {
+                let rect = Rect::from_min_max(Pos2::new(body.left(), row.1), Pos2::new(body.right(), row.2));
+                let semitones = alt_scroll / self.midi_row_height(rect);
+                self.scroll_midi(semitones);
+            } else if pinch != 1.0 {
                 let anchor = self.view.time(body.left(), body.width(), pos.x);
                 self.view.zoom_at(anchor, 1.0 / pinch as f64, duration);
                 self.view_changed_at = Instant::now();
@@ -614,6 +621,18 @@ impl App {
             } else if let Some(row) = row_at(pos.y) {
                 if self.hit_handle(pos, body, row).is_some() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                }
+            }
+        }
+
+        // Une note de la piste MIDI se fait entendre dès qu'on appuie dessus
+        if ui.input(|i| i.pointer.primary_pressed()) {
+            if let Some(pos) = hover {
+                if let Some(row) = rows.iter().find(|r| r.0 == Row::Midi && pos.y >= r.1 && pos.y < r.2) {
+                    let rect = Rect::from_min_max(Pos2::new(body.left(), row.1), Pos2::new(body.right(), row.2));
+                    if let Some(note) = self.midi_note_at(rect, pos) {
+                        self.play_note(note);
+                    }
                 }
             }
         }
@@ -780,6 +799,14 @@ impl App {
                             self.zoom_on_selected();
                         }
                         self.seek_to(time, true);
+                    }
+                    // Un clic sur une note la fait entendre, sans déplacer la lecture
+                    Some(Row::Midi) => {
+                        let row = rows.iter().find(|r| r.0 == Row::Midi).map_or((0.0, 0.0), |r| (r.1, r.2));
+                        let rect = Rect::from_min_max(Pos2::new(body.left(), row.0), Pos2::new(body.right(), row.1));
+                        if self.midi_note_at(rect, pos).is_none() {
+                            self.seek_to(time, true);
+                        }
                     }
                     Some(_) => self.seek_to(time, true),
                     None => {}
