@@ -1797,23 +1797,53 @@ impl App {
         let curve = &media.smoothed;
         let y = |p: f64| rect.bottom() - music_scale(p) * rect.height();
         if !curve.is_empty() {
-            let mut mesh = Mesh::default();
             let width = rect.width() as usize;
             let levels = smooth_curve(curve, detect::STEP, self.view, width);
             let per_column = self.view.span / width.max(1) as f64;
-            for (column, value) in levels.into_iter().enumerate() {
-                let top = y(value);
-                if top < rect.bottom() - 0.5 {
-                    let x = rect.left() + column as f32;
-                    let bar = Rect::from_min_max(Pos2::new(x, top), Pos2::new(x + 1.0, rect.bottom()));
-                    // Dans une séquence, sa couleur en plus clair ; ailleurs, en retrait
+            // Dans une séquence, sa couleur en plus clair ; ailleurs, en retrait
+            let fills: Vec<Color32> = (0..levels.len())
+                .map(|column| {
                     let time = self.view.start + (column as f64 + 0.5) * per_column;
                     let inside = media.project.segments.iter().find(|s| s.start <= time && time < s.end);
-                    let fill = inside.map_or(Color32::from_white_alpha(38), |s| lighter(segment_color(s.origin), 0.42));
-                    mesh.add_colored_rect(bar, fill);
+                    inside.map_or(Color32::from_white_alpha(38), |s| lighter(segment_color(s.origin), 0.42))
+                })
+                .collect();
+            let points: Vec<Pos2> = levels
+                .iter()
+                .enumerate()
+                .map(|(column, &value)| Pos2::new(rect.left() + column as f32 + 0.5, y(value)))
+                .collect();
+            // Une surface aux bords obliques entre les colonnes, plutôt qu'une barre par colonne
+            // (en marches quand la vue est large)…
+            let mut mesh = Mesh::default();
+            for (column, pair) in points.windows(2).enumerate() {
+                let (a, b) = (pair[0], pair[1]);
+                if a.y >= rect.bottom() - 0.01 && b.y >= rect.bottom() - 0.01 {
+                    continue;
                 }
+                let fill = fills[column];
+                let first = mesh.vertices.len() as u32;
+                for corner in [a, b, Pos2::new(b.x, rect.bottom()), Pos2::new(a.x, rect.bottom())] {
+                    mesh.colored_vertex(corner, fill);
+                }
+                mesh.add_triangle(first, first + 1, first + 2);
+                mesh.add_triangle(first, first + 2, first + 3);
             }
             painter.add(mesh);
+            // …et un trait lissé sur le dessus : un bord net mais sans crénelage
+            let mut start = 0;
+            while start + 1 < points.len() {
+                let fill = fills[start];
+                let mut end = start + 1;
+                while end + 1 < points.len() && fills[end] == fill {
+                    end += 1;
+                }
+                let line: Vec<Pos2> = points[start..=end].to_vec();
+                if line.iter().any(|p| p.y < rect.bottom() - 0.5) {
+                    painter.add(Shape::line(line, Stroke::new(1.0, fill.gamma_multiply(0.7))));
+                }
+                start = end;
+            }
             let (_, low) = detect::sensitivity_thresholds(media.project.settings.sensitivity);
             // Aux extrêmes du curseur, la ligne reste visible au bord de la piste
             let threshold = y(low).clamp(rect.top() + 1.0, rect.bottom() - 1.0);

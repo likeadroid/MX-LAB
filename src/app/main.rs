@@ -1,4 +1,4 @@
-#![cfg_attr(not(test), windows_subsystem = "windows")]
+﻿#![cfg_attr(not(test), windows_subsystem = "windows")]
 
 //! MX-LAB : étudier la musique à l'image.
 //! Timeline de la vidéo, détection de la musique, onde, spectre, loudness, lecteur précis,
@@ -2860,13 +2860,34 @@ mod tests {
     #[ignore]
     fn snapshot_of_the_window() {
         let mut app = app_with_surround();
-        app.media.as_mut().unwrap().project.scores = vec![0.0; 100];
-        // Une courbe qui balaie de 0 à 1, pour voir l'échelle de la piste des séquences
-        let steps = (600.0 / detect::STEP) as usize;
-        app.media.as_mut().unwrap().smoothed = (0..steps).map(|i| 10f64.powf(-4.0 + 4.0 * i as f64 / steps as f64)).collect();
+        // Deux heures de scores comme en sort le modèle : des crans de 1/256, surtout bas,
+        // avec des passages de musique brefs, vus en entier (le plus dézoomé)
+        let duration = 7200.0;
+        let steps = (duration / detect::STEP) as usize;
+        let mut seed = 12345u64;
+        let mut random = move || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as f64 / (1u64 << 31) as f64
+        };
+        let mut level = 0.0f64;
+        let scores: Vec<f32> = (0..steps)
+            .map(|_| {
+                if random() < 0.004 {
+                    level = random() * 0.4;
+                }
+                level *= 0.6;
+                (((level + random() * 0.01) * 256.0).round() / 256.0) as f32
+            })
+            .collect();
+        let media = app.media.as_mut().unwrap();
+        media.project.duration = duration;
+        media.smoothed = detect::smoothed_scores(&scores);
+        media.project.scores = scores;
+        app.view = View { start: 0.0, span: duration };
+        let pixels_per_point: f32 = std::env::var("MX_LAB_SNAPSHOT_SCALE").ok().and_then(|s| s.parse().ok()).unwrap_or(2.0);
         let mut harness = Harness::builder()
             .with_size(egui::vec2(1500.0, 950.0))
-            .with_pixels_per_point(2.0)
+            .with_pixels_per_point(pixels_per_point)
             .build_ui_state(
                 |ui, app: &mut App| {
                     style(ui.ctx());
