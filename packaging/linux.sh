@@ -18,6 +18,15 @@ chmod +x "$linuxdeploy"
 libmpv="$(ldconfig -p | sed -n 's/.*libmpv\.so\.2 .*=> \(.*\)$/\1/p' | head -1)"
 test -n "$libmpv"
 
+# Dépendances de libmpv que linuxdeploy laisse d'habitude au système, mais qui manquent
+# sur bien des bureaux : on les livre (PipeWire, lui, reste celui du système)
+extra_libraries=()
+for name in libjack.so.0 libusb-1.0.so.0; do
+  path="$(ldconfig -p | sed -n "s/.*$name .*=> \(.*\)$/\1/p" | head -1)"
+  test -n "$path"
+  extra_libraries+=(--library "$path")
+done
+
 target/release/mx-lab --icon-png 256 target/package/mx-lab.png
 
 export APPIMAGE_EXTRACT_AND_RUN=1
@@ -27,6 +36,7 @@ export OUTPUT=MX-LAB-x86_64.AppImage
   --executable target/release/mx-lab \
   --executable "$(command -v ffmpeg)" \
   --library "$libmpv" \
+  "${extra_libraries[@]}" \
   --desktop-file packaging/mx-lab.desktop \
   --icon-file target/package/mx-lab.png \
   --output appimage

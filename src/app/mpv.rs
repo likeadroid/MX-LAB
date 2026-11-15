@@ -119,15 +119,18 @@ fn open_library() -> Result<Library, String> {
     };
     // Celle livrée avec l'app ou de Homebrew d'abord, puis le chargeur du système
     let found = mx_lab::paths::find_tool(names).map(|path| path.into_os_string());
-    let mut last_error = String::new();
+    // Une bibliothèque trouvée mais refusée : c'est son erreur qui compte
+    let mut first_error = None;
     for name in found.into_iter().chain(names.iter().map(|name| (*name).into())) {
         match unsafe { Library::new(&name) } {
             Ok(library) => return Ok(library),
-            Err(error) => last_error = error.to_string(),
+            Err(error) => {
+                first_error.get_or_insert(error.to_string());
+            }
         }
     }
     let hint = if cfg!(target_os = "macos") { "brew install mpv" } else { "installer libmpv, paquet libmpv2" };
-    Err(format!("libmpv introuvable ({hint}) : {last_error}"))
+    Err(format!("libmpv introuvable ({hint}) : {}", first_error.unwrap_or_default()))
 }
 
 impl Api {
