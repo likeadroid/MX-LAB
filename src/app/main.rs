@@ -1825,7 +1825,7 @@ impl App {
                     if menu_check(ui, self.tracks.audio, "Audio").clicked() {
                         self.tracks.audio = !self.tracks.audio;
                     }
-                    if menu_check(ui, self.tracks.midi, "MIDI").clicked() {
+                    if menu_check(ui, self.tracks.midi, "MIDI (expérimental)").clicked() {
                         self.tracks.midi = !self.tracks.midi;
                     }
                 });
@@ -2920,6 +2920,7 @@ mod tests {
             let notes = mx_lab::transcribe::transcribe(Path::new(&video), 0, &layout, 0.0, length.min(first.end - first.start)).unwrap();
             let shifted = notes.iter().map(|n| mx_lab::transcribe::Note { start: n.start + first.start, end: n.end + first.start, ..*n }).collect();
             media.midi.insert(first.id, ((first.start, first.end), Arc::new(shifted)));
+            app.tracks.midi = true;
             app.view = View { start: first.start - 5.0, span: first.end - first.start + 10.0 };
         }
         let pixels_per_point: f32 = std::env::var("MX_LAB_SNAPSHOT_SCALE").ok().and_then(|s| s.parse().ok()).unwrap_or(2.0);
@@ -4121,6 +4122,7 @@ mod tests {
             mx_lab::transcribe::Note { start: first.start + 2.0, end: first.start + 4.0, pitch: 67, velocity: 0.4 },
         ];
         app.media.as_mut().unwrap().midi.insert(first.id, ((first.start, first.end), Arc::new(notes)));
+        app.tracks.midi = true;
         let mut harness = harness(app);
         harness.step();
         harness.get_by_label("MIDI");
@@ -4138,12 +4140,33 @@ mod tests {
     }
 
     #[test]
+    fn midi_is_off_by_default_and_turned_on_from_the_display_menu() {
+        let mut harness = harness(app());
+        harness.step();
+        assert!(!harness.state().tracks.midi);
+        assert_eq!(harness.query_all_by_label("MIDI").count(), 0, "pas de piste MIDI");
+        assert!(harness.state().media.as_ref().unwrap().midi_running.is_none(), "rien n'est calculé");
+        harness.get_by_label("Affichage").click();
+        harness.step();
+        harness.step();
+        harness.get_by_label("Pistes").hover();
+        harness.step();
+        harness.step();
+        harness.get_by_label("MIDI (expérimental)").click();
+        harness.step();
+        harness.step();
+        assert!(harness.state().tracks.midi);
+        harness.get_by_label("MIDI");
+    }
+
+    #[test]
     fn midi_zoom_scroll_and_a_click_on_a_note() {
         let mut app = app();
         let first = app.media.as_ref().unwrap().project.segments[0].clone();
         let note = mx_lab::transcribe::Note { start: first.start + 10.0, end: first.start + 30.0, pitch: 60, velocity: 0.8 };
         let notes = vec![note, mx_lab::transcribe::Note { pitch: 84, ..note }];
         app.media.as_mut().unwrap().midi.insert(first.id, ((first.start, first.end), Arc::new(notes)));
+        app.tracks.midi = true;
         let mut harness = harness(app);
         harness.step();
         let full = harness.state().midi_view();

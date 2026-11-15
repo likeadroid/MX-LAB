@@ -147,7 +147,8 @@ pub struct Tracks {
     pub audio_channels: Channels,
     /// Courbes de loudness sur le spectre et repères du mixeur.
     pub loudness: bool,
-    /// Notes transcrites des séquences, en piano roll.
+    /// Notes transcrites des séquences, en piano roll. Expérimental : ni affichée ni calculée
+    /// tant qu'on ne l'active pas dans Affichage > Pistes.
     pub midi: bool,
 }
 
@@ -159,7 +160,7 @@ impl Default for Tracks {
             view: AudioView::default(),
             audio_channels: Channels::default(),
             loudness: true,
-            midi: true,
+            midi: false,
         }
     }
 }
@@ -2938,7 +2939,9 @@ mod tests {
     #[test]
     fn music_and_sequences_share_a_track_and_audio_is_a_single_track() {
         let rows: Vec<Row> = layout_rows(0.0, 600.0, Tracks::default()).iter().map(|r| r.0).collect();
-        assert_eq!(rows, [Row::Overview, Row::Ruler, Row::Strip, Row::Sequences, Row::Audio, Row::Midi]);
+        assert_eq!(rows, [Row::Overview, Row::Ruler, Row::Strip, Row::Sequences, Row::Audio]);
+        let with_midi: Vec<Row> = layout_rows(0.0, 600.0, Tracks { midi: true, ..Default::default() }).iter().map(|r| r.0).collect();
+        assert_eq!(with_midi.last(), Some(&Row::Midi));
     }
 
     #[test]

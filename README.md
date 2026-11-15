@@ -8,7 +8,7 @@ Logiciel pour étudier la musique d'un film à l'image : timeline de la vidéo, 
 - **Loudness** BS.1770 par canal (TP, I, S, M, LRA), avec cibles réglables
 - **Mixeur** : solo, mute et fader par canal
 - **Séquences** : tableau modifiable (bornes, mesures, mood, ensemble, instruments), notes, export sans perte calé sur les keyframes (FFmpeg)
-- **MIDI** : les notes de chaque séquence, transcrites par le modèle Basic Pitch (à partir de L et R en 5.1) et affichées en piano roll
+- **MIDI (expérimental)** : à activer dans Affichage > Pistes. Les notes de chaque séquence, transcrites par le modèle Basic Pitch (à partir de L et R en 5.1), affichées en piano roll ; un clic sur une note la fait entendre
 - **Projet** `<vidéo>.mx-lab.json` enregistré à côté de la vidéo
 
 ## Installer
