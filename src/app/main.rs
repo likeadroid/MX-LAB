@@ -24,6 +24,7 @@ use release_name::ReleaseInfo;
 use signals::{Detail, Signals, Strip};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 use timeline::{AudioView, Drag, Tracks, View};
@@ -101,6 +102,10 @@ pub struct Media {
     strip: Option<Arc<Strip>>,
     strip_texture: Option<egui::TextureHandle>,
     detect_progress: Option<u32>,
+    /// Levé pour interrompre la détection en cours.
+    detect_cancel: Arc<AtomicBool>,
+    /// Détection rétablie avant que la piste audio soit connue : à lancer dès qu'elle l'est.
+    detect_waiting: bool,
     signals_progress: Option<u32>,
     strip_progress: Option<u32>,
     undo: Vec<Vec<Segment>>,
@@ -527,6 +532,26 @@ fn paint_table_row(
 
 /// Applique une détection sans perdre la séquence choisie : si elle a fusionné avec une
 /// voisine, la sélection passe à celle qui recouvre désormais son milieu.
+/// Détection de la musique, sur son propre fil ; `cancel` l'arrête entre deux lots.
+fn run_detection(path: &Path, track: usize, layout: &str, duration: f64, cancel: Arc<AtomicBool>, send: &(impl Fn(Job) + Clone + Send + Sync + 'static)) {
+    let result = guarded(|| {
+        let model = std::panic::catch_unwind(Yamnet::load).map_err(|_| "chargement du modèle impossible".to_string())?;
+        let (mixes, _) = detect::choose_mixes_on(path, track, layout)?;
+        let progress = {
+            let send = send.clone();
+            move |p: u32| send(Job::DetectProgress(p))
+        };
+        detect::detect_music_probabilities_live(&model, path, duration, &mixes, &progress, &mut |scores| {
+            if cancel.load(Ordering::Relaxed) {
+                return false;
+            }
+            send(Job::DetectPartial(scores));
+            true
+        })
+    });
+    send(Job::Detected(result));
+}
+
 fn apply_detection_keeping_selection(project: &mut Project, selected: &mut Option<u64>, detected: &[(f64, f64)]) {
     let middle = selected.and_then(|id| project.segment(id)).map(|s| (s.start + s.end) / 2.0);
     project.apply_detection(detected);
@@ -1017,6 +1042,10 @@ impl App {
         }
         self.recent.add(&path);
         self.generation += 1;
+        // La détection de la vidéo précédente n'a plus de raison de tourner
+        if let Some(media) = &self.media {
+            media.detect_cancel.store(true, Ordering::Relaxed);
+        }
         let project_path = project::project_path(&path);
         let mut status = String::new();
         let project = if project_path.is_file() {
@@ -1030,7 +1059,8 @@ impl App {
         } else {
             Project::new(&path)
         };
-        let needs_detection = project.scores.is_empty();
+        let needs_detection = project.scores.is_empty() && !project.detection_off;
+        let detect_cancel = Arc::new(AtomicBool::new(false));
         let audio_track = project.audio_track;
         let channel_gains = project.channel_gains.clone();
         let master_gain_db = project.master_gain_db;
@@ -1046,6 +1076,8 @@ impl App {
             strip: None,
             strip_texture: None,
             detect_progress: needs_detection.then_some(0),
+            detect_cancel: detect_cancel.clone(),
+            detect_waiting: false,
             signals_progress: Some(0),
             strip_progress: Some(0),
             undo: Vec::new(),
@@ -1087,10 +1119,10 @@ impl App {
             player.load(&path);
             player.set_speed(1.0);
         }
-        self.start_jobs(ctx, path, audio_track, needs_detection);
+        self.start_jobs(ctx, path, audio_track, needs_detection.then_some(detect_cancel));
     }
 
-    fn start_jobs(&mut self, ctx: &egui::Context, path: PathBuf, track: usize, needs_detection: bool) {
+    fn start_jobs(&mut self, ctx: &egui::Context, path: PathBuf, track: usize, detection: Option<Arc<AtomicBool>>) {
         let generation = self.generation;
         let sender = self.jobs_sender.clone();
         let ctx = ctx.clone();
@@ -1144,24 +1176,10 @@ impl App {
                 });
             }
 
-            if needs_detection {
+            // Coupée entre-temps : la détection ne démarre pas
+            if let Some(cancel) = detection.filter(|cancel| !cancel.load(Ordering::Relaxed)) {
                 let (path, layout, send) = (path.clone(), layout.clone(), send.clone());
-                std::thread::spawn(move || {
-                    let result = guarded(|| {
-                        let model = std::panic::catch_unwind(Yamnet::load)
-                            .map_err(|_| "chargement du modèle impossible".to_string())?;
-                        let (mixes, _) = detect::choose_mixes_on(&path, track, &layout)?;
-                        let progress = {
-                            let send = send.clone();
-                            move |p: u32| send(Job::DetectProgress(p))
-                        };
-                        let partial = send.clone();
-                        detect::detect_music_probabilities_live(&model, &path, duration, &mixes, &progress, &mut |scores| {
-                            partial(Job::DetectPartial(scores))
-                        })
-                    });
-                    send(Job::Detected(result));
-                });
+                std::thread::spawn(move || run_detection(&path, track, &layout, duration, cancel, &send));
             }
 
             let cache = signals::cache_path(&path, &signals::track_cache_kind("signals", track));
@@ -1181,8 +1199,57 @@ impl App {
         });
     }
 
+    /// Lance la détection seule, quand on la rétablit sans scores.
+    fn spawn_detection(&mut self, ctx: &egui::Context) {
+        let generation = self.generation;
+        let Some(media) = &mut self.media else { return };
+        let Some(layout) = media.layout.clone() else {
+            media.detect_waiting = true;
+            return;
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        media.detect_cancel = cancel.clone();
+        media.detect_waiting = false;
+        media.detect_progress = Some(0);
+        let (path, track, duration) = (media.path.clone(), media.project.audio_track, media.project.duration);
+        let (sender, ctx) = (self.jobs_sender.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            let send = move |job: Job| {
+                let _ = sender.send((generation, job));
+                ctx.request_repaint();
+            };
+            run_detection(&path, track, &layout, duration, cancel, &send);
+        });
+    }
+
+    /// L'interrupteur « Détection » : coupée, plus de séquences automatiques et le calcul s'arrête.
+    pub fn set_detection(&mut self, ctx: &egui::Context, on: bool) {
+        let Some(media) = &mut self.media else { return };
+        if on != media.project.detection_off {
+            return;
+        }
+        media.project.set_detection(on);
+        if !on {
+            media.detect_cancel.store(true, Ordering::Relaxed);
+            media.detect_progress = None;
+            media.detect_waiting = false;
+            if self.selected.is_some_and(|id| media.project.segment(id).is_none()) {
+                self.selected = None;
+            }
+            media.mark_changed();
+        } else if media.project.scores.is_empty() {
+            media.mark_changed();
+            self.spawn_detection(ctx);
+        } else {
+            self.apply_detection();
+        }
+    }
+
     fn apply_detection(&mut self) {
         let Some(media) = &mut self.media else { return };
+        if media.project.detection_off {
+            return;
+        }
         let settings = media.project.settings.clone();
         let detected = detect::scores_to_segments(
             &media.project.scores,
@@ -1218,6 +1285,7 @@ impl App {
             match job {
                 Job::Probed(Ok((layout, duration))) => {
                     media.layout = Some(layout);
+                    let waiting = media.detect_waiting;
                     if duration > 0.0 {
                         media.project.duration = duration;
                         // Un résultat de calcul, pas une modification de l'utilisateur
@@ -1227,6 +1295,9 @@ impl App {
                     }
                     self.view = self.requested_view.take().unwrap_or(View { start: 0.0, span: self.duration().max(1.0) });
                     self.view_changed_at = Instant::now();
+                    if waiting {
+                        self.spawn_detection(ctx);
+                    }
                 }
                 Job::Chapters(chapters) => media.chapters = chapters,
                 Job::Info(info) => media.info = info,
@@ -1242,6 +1313,8 @@ impl App {
                     media.signals_progress = None;
                     self.status = format!("Analyse audio impossible : {error}");
                 }
+                // Détection coupée : ce qui arrive encore du calcul est ignoré
+                Job::DetectProgress(_) | Job::DetectPartial(_) if media.project.detection_off => {}
                 Job::DetectProgress(progress) => media.detect_progress = Some(progress),
                 // Un aperçu : ni enregistré, ni compté comme une modification
                 Job::DetectPartial(scores) => {
@@ -1270,7 +1343,9 @@ impl App {
                 }
                 Job::Detected(Err(error)) => {
                     media.detect_progress = None;
-                    self.status = format!("Détection impossible : {error}");
+                    if error != detect::CANCELLED {
+                        self.status = format!("Détection impossible : {error}");
+                    }
                 }
                 Job::SignalsProgress(progress) => media.signals_progress = Some(progress),
                 Job::Signals(Ok(signals)) => {
@@ -2750,6 +2825,8 @@ mod tests {
             strip: None,
             strip_texture: None,
             detect_progress: None,
+            detect_cancel: Arc::new(AtomicBool::new(false)),
+            detect_waiting: false,
             signals_progress: None,
             strip_progress: None,
             undo: Vec::new(),
@@ -4057,12 +4134,59 @@ mod tests {
         harness.step();
         harness.step();
         assert_eq!(harness.state().media.as_ref().unwrap().project.settings.sensitivity, 100.0);
+    }
 
-        assert!(harness.state().tracks.music_curve);
+    #[test]
+    fn cancelled_detection_stops_at_once() {
+        let folder = std::env::temp_dir().join(format!("mx-lab-cancel-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let source = folder.join("long.wav");
+        let (log, ok) = mx_lab::ffmpeg::run(&[
+            "-y".as_ref(),
+            "-f".as_ref(),
+            "lavfi".as_ref(),
+            "-i".as_ref(),
+            "sine=frequency=440:duration=1800".as_ref(),
+            source.as_os_str(),
+        ])
+        .unwrap();
+        assert!(ok, "{log}");
+        let model = Yamnet::load();
+        let started = Instant::now();
+        let mut batches = 0;
+        let result = detect::detect_music_probabilities_live(&model, &source, 1800.0, &[Vec::new()], &|_| {}, &mut |_| {
+            batches += 1;
+            false
+        });
+        assert_eq!(result, Err(detect::CANCELLED.to_string()));
+        assert_eq!(batches, 1, "arrêt dès le premier lot");
+        assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn detection_switch_sets_detected_sequences_aside() {
+        let mut app = app();
+        app.media.as_mut().unwrap().project.scores = vec![0.0; 100];
+        let mut harness = harness(app);
+        harness.step();
+        // Coupée : les séquences détectées sont mises de côté, la manuelle reste
+        harness.state_mut().media.as_mut().unwrap().project.segments[1].origin = Origin::Manual;
         harness.get_by_label("Détection").click();
         harness.step();
         harness.step();
-        assert!(!harness.state().tracks.music_curve);
+        let project = &harness.state().media.as_ref().unwrap().project;
+        assert!(project.detection_off);
+        assert_eq!(project.segments.len(), 1);
+        assert_eq!(project.segments[0].origin, Origin::Manual);
+        assert_eq!(project.set_aside.len(), 2);
+        // Rétablie : elles reviennent, recalées sur les scores
+        harness.get_by_label("Détection").click();
+        harness.step();
+        harness.step();
+        let project = &harness.state().media.as_ref().unwrap().project;
+        assert!(!project.detection_off && project.set_aside.is_empty());
+        assert!(project.segments.iter().any(|s| s.origin == Origin::Manual));
     }
 
     #[test]
@@ -4315,7 +4439,10 @@ mod tests {
         let model = Yamnet::load();
         let mixes = vec![vec!["-ac".to_string(), "1".to_string()]];
         let mut lengths = Vec::new();
-        let scores = detect::detect_music_probabilities_live(&model, &source, 600.0, &mixes, &|_| {}, &mut |partial| lengths.push(partial.len())).unwrap();
+        let scores = detect::detect_music_probabilities_live(&model, &source, 600.0, &mixes, &|_| {}, &mut |partial| {
+            lengths.push(partial.len());
+            true
+        }).unwrap();
         std::fs::remove_dir_all(&folder).unwrap();
         assert!(lengths.len() >= 2, "{lengths:?}");
         assert!(lengths.windows(2).all(|p| p[1] > p[0]), "{lengths:?}");

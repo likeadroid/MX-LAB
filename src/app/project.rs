@@ -116,6 +116,12 @@ pub struct Project {
     /// Fader du mix, en dB.
     #[serde(default)]
     pub master_gain_db: f32,
+    /// Détection coupée : plus de séquences automatiques, ni de calcul.
+    #[serde(default)]
+    pub detection_off: bool,
+    /// Les séquences détectées, mises de côté avec leurs noms et notes pendant que la détection est coupée.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub set_aside: Vec<Segment>,
 }
 
 pub fn project_path(video: &Path) -> PathBuf {
@@ -170,6 +176,26 @@ impl Project {
     /// Remplace les séquences détectées, sans toucher à ce qui a été retouché ou ajouté.
     /// Une séquence qui recouvre une ancienne en reprend l'identité : la détection progresse
     /// sans faire perdre la sélection ni ce qui a déjà été saisi.
+    /// Coupe ou rétablit la détection. Coupée, ses séquences sont mises de côté ; rétablie,
+    /// elles reviennent, puis `apply_detection` les recale sur les scores.
+    pub fn set_detection(&mut self, on: bool) {
+        if on != self.detection_off {
+            return;
+        }
+        self.detection_off = !on;
+        if on {
+            let mut back = std::mem::take(&mut self.set_aside);
+            back.retain(|s| !self.segments.iter().any(|kept| s.start < kept.end && kept.start < s.end));
+            self.segments.extend(back);
+            self.segments.sort_by(|a, b| a.start.total_cmp(&b.start));
+        } else {
+            let (detected, kept): (Vec<Segment>, Vec<Segment>) =
+                std::mem::take(&mut self.segments).into_iter().partition(|s| s.origin == Origin::Detected);
+            self.segments = kept;
+            self.set_aside = detected;
+        }
+    }
+
     pub fn apply_detection(&mut self, detected: &[(f64, f64)]) {
         let (mut previous, kept): (Vec<Segment>, Vec<Segment>) =
             std::mem::take(&mut self.segments).into_iter().partition(|s| s.origin == Origin::Detected);

@@ -104,6 +104,15 @@ impl Stream {
         self.child.stdout.as_mut().unwrap()
     }
 
+    /// Arrête ffmpeg sans attendre la fin de la lecture.
+    pub fn kill(mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(errors) = self.errors.take() {
+            let _ = errors.join();
+        }
+    }
+
     pub fn finish(mut self) -> Result<(), String> {
         drop(self.child.stdout.take());
         let status = self.child.wait().map_err(|e| e.to_string())?;

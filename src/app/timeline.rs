@@ -148,8 +148,6 @@ pub struct Tracks {
     pub audio_channels: Channels,
     /// Courbes de loudness sur le spectre et repères du mixeur.
     pub loudness: bool,
-    /// Probabilité de musique et seuil de détection, sur la piste des séquences.
-    pub music_curve: bool,
 }
 
 impl Default for Tracks {
@@ -160,7 +158,6 @@ impl Default for Tracks {
             view: AudioView::default(),
             audio_channels: Channels::default(),
             loudness: true,
-            music_curve: true,
         }
     }
 }
@@ -1129,11 +1126,12 @@ impl App {
             "Courbe : probabilité de musique. Ligne : seuil de détection. Glisser sur le vide : créer une séquence.",
         );
         let row = Rect::from_min_size(Pos2::new(inner.left(), rect.top() + 27.0), egui::vec2(inner.width(), 20.0));
-        let detection = self.tracks.music_curve;
-        if switch_row(ui, row, "Détection", detection, "Affiche la probabilité de musique et le seuil de détection sur la piste")
-            .clicked()
-        {
-            self.tracks.music_curve = !detection;
+        let detection = self.media.as_ref().is_some_and(|m| !m.project.detection_off);
+        let help = "Détection automatique de la musique. Coupée : ses séquences sont mises de côté (les séquences \
+                    retouchées ou ajoutées à la main restent) et un calcul en cours s'arrête.";
+        if switch_row(ui, row, "Détection", detection, help).clicked() {
+            let ctx = ui.ctx().clone();
+            self.set_detection(&ctx, !detection);
         }
         // L'engrenage, juste après le mot : gap, anticipation et post
         let word = ui.painter().layout_no_wrap("Détection".into(), FontId::proportional(FONT_SIZE), NAME).size().x;
@@ -1154,7 +1152,7 @@ impl App {
     /// La sensibilité : une case avec son nom, sa valeur et une glissière.
     fn sensitivity_box(&mut self, ui: &mut egui::Ui, rect: Rect) {
         let Some(media) = &self.media else { return };
-        let enabled = !media.project.scores.is_empty();
+        let enabled = !media.project.scores.is_empty() && !media.project.detection_off;
         let mut settings = media.project.settings.clone();
         let sense = if enabled { Sense::click_and_drag() } else { Sense::hover() };
         let response = ui.interact(rect, ui.scope_id().with("sensitivity"), sense).on_hover_text(crate::SENSITIVITY_HELP);
@@ -1241,11 +1239,11 @@ impl App {
     /// Une ligne par piste : nom et œil pour l'afficher, puis solo et mute du canal.
     fn track_table(&mut self, ui: &mut egui::Ui, table: Rect, tracks: &[&str], row_height: f32) {
         let painter = ui.painter().clone();
-        let mute_left = table.right() - TOGGLE_CELL;
+        let eye_left = table.right() - TOGGLE_CELL;
+        let mute_left = eye_left - TOGGLE_CELL;
         let solo_left = mute_left - TOGGLE_CELL;
-        let eye_left = solo_left - TOGGLE_CELL;
         painter.rect_stroke(table, 3.0, Stroke::new(1.0, CELL_LINE), egui::StrokeKind::Inside);
-        for x in [eye_left, solo_left, mute_left] {
+        for x in [solo_left, mute_left, eye_left] {
             painter.line_segment([Pos2::new(x, table.top()), Pos2::new(x, table.bottom())], Stroke::new(1.0, CELL_LINE));
         }
         let shown = self.lanes(self.tracks.audio_channels).len();
@@ -1259,17 +1257,20 @@ impl App {
             let visible = self.tracks.audio_channels.is_visible(track);
             // La dernière piste affichée reste : une zone vide ne servirait à rien
             let only = visible && shown == 1;
-            let toggle = Rect::from_min_max(row.min, Pos2::new(solo_left, row.bottom()));
+            // Le nom et l'œil affichent ou masquent la piste
             let sense = if only { Sense::hover() } else { Sense::click() };
-            let response = ui.interact(toggle, ui.scope_id().with(("track-visible", track)), sense);
+            let help = if only { "Au moins une piste reste affichée" } else { "Afficher ou masquer cette piste" };
+            let name_cell = Rect::from_min_max(row.min, Pos2::new(solo_left, row.bottom()));
+            let eye_cell = Rect::from_min_max(Pos2::new(eye_left, row.top()), row.max);
+            let response = ui.interact(name_cell, ui.scope_id().with(("track-visible", track)), sense).on_hover_text(help);
             response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, !only, visible, full_name));
-            let response = if only {
-                response.on_hover_text("Au moins une piste reste affichée")
-            } else {
-                response.on_hover_text("Afficher ou masquer cette piste")
-            };
-            if response.hovered() && !only {
-                painter.rect_filled(toggle.shrink(1.0), 2.0, Color32::from_white_alpha(8));
+            let eye_response = ui.interact(eye_cell, ui.scope_id().with(("track-eye", track)), sense).on_hover_text(help);
+            let eye_label = format!("Afficher {full_name}");
+            eye_response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, !only, visible, &eye_label));
+            for (cell, hovered) in [(name_cell, response.hovered()), (eye_cell, eye_response.hovered())] {
+                if hovered && !only {
+                    painter.rect_filled(cell.shrink(1.0), 2.0, Color32::from_white_alpha(8));
+                }
             }
             painter.text(
                 Pos2::new(row.left() + 10.0, row.center().y),
@@ -1280,7 +1281,7 @@ impl App {
             );
             let eye = Pos2::new(eye_left + TOGGLE_CELL / 2.0, row.center().y);
             paint_eye(&painter, eye, if visible { Color32::WHITE } else { Color32::from_gray(105) });
-            if response.clicked() {
+            if response.clicked() || eye_response.clicked() {
                 self.tracks.audio_channels.set(track, !visible);
             }
 
@@ -1288,7 +1289,6 @@ impl App {
                 let cell = Rect::from_min_max(Pos2::new(left, row.top()), Pos2::new(left + TOGGLE_CELL, row.bottom()));
                 // Le mix n'est pas un canal : il n'a ni solo ni mute
                 if track == 0 {
-                    painter.text(cell.center(), Align2::CENTER_CENTER, letter, FontId::proportional(FONT_SIZE), Color32::from_gray(80));
                     continue;
                 }
                 let source = track - 1;
@@ -1373,10 +1373,9 @@ impl App {
                 return;
             };
             let measure = &film.measure;
-            let target = media.project.loudness_target;
             let rows = [
-                ("True peak", "dBTP", loudness_text(measure.true_peak), value_color(true_peak_exceeds(measure.true_peak, target))),
-                ("Intégrée", "LKFS", loudness_text(measure.integrated), value_color(integrated_misses(measure.integrated, target))),
+                ("True peak", "dBTP", loudness_text(measure.true_peak), Color32::WHITE),
+                ("Intégrée", "LKFS", loudness_text(measure.integrated), Color32::WHITE),
                 ("Short-term max", "LKFS", loudness_text(measure.max_short_term), Color32::WHITE),
                 ("Momentary max", "LKFS", loudness_text(measure.max_momentary), Color32::WHITE),
                 ("LRA", "LU", format!("{:.1}", measure.range), Color32::WHITE),
@@ -1792,7 +1791,7 @@ impl App {
 
     fn paint_music(&self, painter: &egui::Painter, rect: Rect) {
         let Some(media) = &self.media else { return };
-        if !self.tracks.music_curve {
+        if media.project.detection_off {
             return;
         }
         let curve = &media.smoothed;
@@ -2335,14 +2334,6 @@ fn true_peak_exceeds(value: f32, target: LoudnessTarget) -> bool {
 
 fn integrated_misses(value: f32, target: LoudnessTarget) -> bool {
     value > NO_LOUDNESS && (value - target.integrated).abs() > target.tolerance
-}
-
-fn value_color(off_target: bool) -> Color32 {
-    if off_target {
-        Color32::from_rgb(255, 90, 90)
-    } else {
-        Color32::WHITE
-    }
 }
 
 /// Bleu dans la tolérance, rouge à 1 LU au-delà, avec un fondu entre les deux.

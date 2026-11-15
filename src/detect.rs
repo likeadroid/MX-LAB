@@ -129,7 +129,7 @@ pub fn music_probabilities(
     duration: f64,
     progress: &(dyn Fn(u32) + Sync),
 ) -> Result<Vec<f32>, String> {
-    for_each_window(video, mix, duration, progress, |_| {}, |window| model.music_probability(window))
+    for_each_window(video, mix, duration, progress, |_| true, |window| model.music_probability(window))
 }
 
 /// Logits des classes demandées toutes les 0,48 s : une ligne par fenêtre.
@@ -141,7 +141,7 @@ pub fn class_logits(
     duration: f64,
     progress: &(dyn Fn(u32) + Sync),
 ) -> Result<Vec<Vec<f32>>, String> {
-    for_each_window(video, mix, duration, progress, |_| {}, |window| model.class_logits(window, classes))
+    for_each_window(video, mix, duration, progress, |_| true, |window| model.class_logits(window, classes))
 }
 
 /// Applique un calcul à chaque fenêtre de l'audio, en parallèle et dans l'ordre.
@@ -150,7 +150,7 @@ fn for_each_window<T: Send>(
     mix: &[String],
     duration: f64,
     progress: &(dyn Fn(u32) + Sync),
-    mut on_batch: impl FnMut(&[T]),
+    mut on_batch: impl FnMut(&[T]) -> bool,
     compute: impl Fn(&[f32]) -> T + Sync,
 ) -> Result<Vec<T>, String> {
     let rate = SAMPLE_RATE.to_string();
@@ -198,7 +198,10 @@ fn for_each_window<T: Send>(
             .map(|i| compute(&samples[i * HOP..i * HOP + WINDOW]))
             .collect();
         scores.extend(batch);
-        on_batch(&scores);
+        if !on_batch(&scores) {
+            stream.kill();
+            return Err(CANCELLED.to_string());
+        }
         samples.drain(..count * HOP);
         if duration > 0.0 {
             progress(((scores.len() as f64 * STEP / duration * 100.0) as u32).min(99));
@@ -313,7 +316,7 @@ pub fn detect_music_probabilities(
     mixes: &[Vec<String>],
     progress: &(dyn Fn(u32) + Sync),
 ) -> Result<Vec<f32>, String> {
-    detect_music_probabilities_live(model, video, duration, mixes, progress, &mut |_| {})
+    detect_music_probabilities_live(model, video, duration, mixes, progress, &mut |_| true)
 }
 
 /// Ce qu'on sait à un instant du calcul : le maximum de ce qui est lu pour le mix en cours et
@@ -334,7 +337,7 @@ pub fn detect_music_probabilities_live(
     duration: f64,
     mixes: &[Vec<String>],
     progress: &(dyn Fn(u32) + Sync),
-    partial: &mut dyn FnMut(Vec<f32>),
+    partial: &mut dyn FnMut(Vec<f32>) -> bool,
 ) -> Result<Vec<f32>, String> {
     let mut scores: Option<Vec<f32>> = None;
     for (index, mix) in mixes.iter().enumerate() {
@@ -355,6 +358,9 @@ pub fn detect_music_probabilities_live(
     }
     Ok(scores.unwrap_or_default())
 }
+
+/// Erreur rendue quand `partial` demande l'arrêt de la détection.
+pub const CANCELLED: &str = "détection interrompue";
 
 pub struct Settings {
     pub sensitivity: f64,
