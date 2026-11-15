@@ -1157,7 +1157,7 @@ impl App {
         let sense = if enabled { Sense::click_and_drag() } else { Sense::hover() };
         let response = ui.interact(rect, ui.scope_id().with("sensitivity"), sense).on_hover_text(crate::SENSITIVITY_HELP);
         let track = Rect::from_min_max(Pos2::new(rect.left() + 10.0, rect.bottom() - 6.0), Pos2::new(rect.right() - 10.0, rect.bottom() - 4.0));
-        let (low, high) = (10.0, 100.0);
+        let (low, high) = (detect::MIN_SENSITIVITY, detect::MAX_SENSITIVITY);
         let mut changed = false;
         if response.dragged() || response.clicked() {
             if let Some(pointer) = response.interact_pointer_pos() {
@@ -1795,8 +1795,7 @@ impl App {
             return;
         }
         let curve = &media.smoothed;
-        // Échelle logarithmique : le seuil se joue dans les faibles probabilités
-        let y = |p: f64| rect.bottom() - ((p.max(0.001).log10() + 3.0) / 3.0) as f32 * rect.height();
+        let y = |p: f64| rect.bottom() - music_scale(p) * rect.height();
         if !curve.is_empty() {
             let mut mesh = Mesh::default();
             let width = rect.width() as usize;
@@ -1816,7 +1815,8 @@ impl App {
             }
             painter.add(mesh);
             let (_, low) = detect::sensitivity_thresholds(media.project.settings.sensitivity);
-            let threshold = y(low);
+            // Aux extrêmes du curseur, la ligne reste visible au bord de la piste
+            let threshold = y(low).clamp(rect.top() + 1.0, rect.bottom() - 1.0);
             painter.line_segment(
                 [Pos2::new(rect.left(), threshold), Pos2::new(rect.right(), threshold)],
                 Stroke::new(1.0, Color32::from_white_alpha(90)),
@@ -2066,6 +2066,15 @@ impl App {
 }
 
 /// Une valeur de loudness, ou un tiret quand il n'y a rien à mesurer.
+/// Hauteur relative (0 à 1) d'une probabilité de musique sur la piste des séquences.
+/// Échelle logarithmique, rognée aux seuils que le curseur de sensibilité peut atteindre :
+/// en bas le seuil à sensibilité maximale, en haut à sensibilité minimale.
+fn music_scale(p: f64) -> f32 {
+    let bottom = detect::sensitivity_thresholds(detect::MAX_SENSITIVITY).1.log10();
+    let top = detect::sensitivity_thresholds(detect::MIN_SENSITIVITY).1.log10();
+    ((p.max(1e-9).log10() - bottom) / (top - bottom)).clamp(0.0, 1.0) as f32
+}
+
 /// Une courbe par colonne de pixels, sans marches ni dents : interpolée au zoom, puis adoucie
 /// sur une largeur qui suit le pas des mesures. L'affichage seul change, pas la détection.
 fn smooth_curve(curve: &[f64], step: f64, view: View, width: usize) -> Vec<f64> {
@@ -2511,6 +2520,17 @@ pub fn detail_image(detail: &signals::Detail) -> egui::ColorImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn music_curve_spans_exactly_the_reachable_thresholds() {
+        let threshold = |sensitivity: f64| detect::sensitivity_thresholds(sensitivity).1;
+        assert!(music_scale(threshold(detect::MAX_SENSITIVITY)).abs() < 1e-5, "sensibilité maximale : en bas");
+        assert!((music_scale(threshold(detect::MIN_SENSITIVITY)) - 1.0).abs() < 1e-5, "minimale : en haut");
+        let middle = music_scale(threshold(55.0));
+        assert!((middle - 0.5).abs() < 1e-5, "le curseur et la ligne avancent ensemble : {middle}");
+        assert_eq!(music_scale(1.0), 1.0, "au-delà : rogné");
+        assert_eq!(music_scale(0.0), 0.0);
+    }
 
     #[test]
     fn music_curve_has_no_stairs_when_zoomed() {

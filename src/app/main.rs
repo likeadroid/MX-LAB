@@ -2861,6 +2861,9 @@ mod tests {
     fn snapshot_of_the_window() {
         let mut app = app_with_surround();
         app.media.as_mut().unwrap().project.scores = vec![0.0; 100];
+        // Une courbe qui balaie de 0 à 1, pour voir l'échelle de la piste des séquences
+        let steps = (600.0 / detect::STEP) as usize;
+        app.media.as_mut().unwrap().smoothed = (0..steps).map(|i| 10f64.powf(-4.0 + 4.0 * i as f64 / steps as f64)).collect();
         let mut harness = Harness::builder()
             .with_size(egui::vec2(1500.0, 950.0))
             .with_pixels_per_point(2.0)

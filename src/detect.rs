@@ -223,6 +223,10 @@ mod partial_tests {
     }
 }
 
+/// Bornes du curseur de sensibilité.
+pub const MIN_SENSITIVITY: f64 = 10.0;
+pub const MAX_SENSITIVITY: f64 = 100.0;
+
 /// Curseur 10-100 : haut = plus sensible = seuils plus bas (défaut 50).
 pub fn sensitivity_thresholds(sensitivity: f64) -> (f64, f64) {
     let factor = 2f64.powf((DEFAULT_SENSITIVITY - sensitivity) / 25.0);
