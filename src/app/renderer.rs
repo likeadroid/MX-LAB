@@ -4,21 +4,36 @@
 
 use std::path::PathBuf;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+// Chaque système n'en propose qu'une partie
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderBackend {
-    /// Le seul sans flash constaté : présenter en OpenGL fait clignoter la fenêtre.
-    #[default]
     Direct3D12,
+    Metal,
     Vulkan,
     OpenGl,
 }
 
+impl Default for RenderBackend {
+    /// Windows : le seul sans flash constaté, présenter en OpenGL fait clignoter la fenêtre.
+    fn default() -> Self {
+        Self::ALL[0]
+    }
+}
+
 impl RenderBackend {
-    pub const ALL: [RenderBackend; 3] = [RenderBackend::Direct3D12, RenderBackend::Vulkan, RenderBackend::OpenGl];
+    /// Les moteurs du système, celui par défaut en premier.
+    #[cfg(windows)]
+    pub const ALL: &[RenderBackend] = &[RenderBackend::Direct3D12, RenderBackend::Vulkan, RenderBackend::OpenGl];
+    #[cfg(target_os = "macos")]
+    pub const ALL: &[RenderBackend] = &[RenderBackend::Metal, RenderBackend::OpenGl];
+    #[cfg(not(any(windows, target_os = "macos")))]
+    pub const ALL: &[RenderBackend] = &[RenderBackend::Vulkan, RenderBackend::OpenGl];
 
     pub fn label(self) -> &'static str {
         match self {
             RenderBackend::Direct3D12 => "Direct3D 12",
+            RenderBackend::Metal => "Metal",
             RenderBackend::Vulkan => "Vulkan",
             RenderBackend::OpenGl => "OpenGL",
         }
@@ -27,18 +42,18 @@ impl RenderBackend {
     fn key(self) -> &'static str {
         match self {
             RenderBackend::Direct3D12 => "dx12",
+            RenderBackend::Metal => "metal",
             RenderBackend::Vulkan => "vulkan",
             RenderBackend::OpenGl => "opengl",
         }
     }
 
     fn parse(text: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|backend| backend.key() == text.trim())
+        Self::ALL.iter().copied().find(|backend| backend.key() == text.trim())
     }
 
     fn path() -> PathBuf {
-        let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-        base.join("MX-LAB").join("studio-renderer.txt")
+        mx_lab::paths::data_dir().join("studio-renderer.txt")
     }
 
     pub fn load() -> Self {
@@ -71,7 +86,7 @@ mod tests {
 
     #[test]
     fn every_backend_reads_back_from_its_key() {
-        for backend in RenderBackend::ALL {
+        for &backend in RenderBackend::ALL {
             assert_eq!(RenderBackend::parse(&format!("{}\n", backend.key())), Some(backend));
         }
         assert_eq!(RenderBackend::parse("inconnu"), None);

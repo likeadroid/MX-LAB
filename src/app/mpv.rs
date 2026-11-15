@@ -1,30 +1,24 @@
-//! Lecteur vidéo : libmpv embarquée.
+//! Lecteur vidéo : libmpv.
 //!
-//! L'interface passe par Direct3D 12 : présenter en OpenGL faisait clignoter toute la fenêtre.
-//! mpv garde OpenGL pour son rendu (et le HDR), sur son propre fil et dans un contexte attaché
-//! à une fenêtre invisible qui ne présente jamais rien ; chaque image est recopiée vers egui.
+//! mpv rend sur son propre fil ; chaque image est recopiée vers une texture egui, si bien que
+//! l'interface garde le moteur de son choix.
+//! - Windows : l'interface passe par Direct3D 12, présenter en OpenGL faisait clignoter toute la
+//!   fenêtre. mpv garde OpenGL pour son rendu (et le HDR), dans un contexte attaché à une fenêtre
+//!   invisible qui ne présente jamais rien. La DLL est embarquée et extraite dans le dossier local.
+//! - macOS et Linux : rendu logiciel de mpv, directement en mémoire, sans contexte graphique.
+//!   libmpv vient du .app, de Homebrew ou du système.
 //!
-//! La DLL est chargée à l'exécution (pas de bibliothèque d'import à fournir) après
-//! extraction dans le dossier local de l'utilisateur, comme ffmpeg.
+//! La bibliothèque est chargée à l'exécution : pas de bibliothèque d'import à fournir.
 
 use eframe::egui::{self, Color32};
-use glow::HasContext;
 use libloading::Library;
 use std::ffi::{c_char, c_double, c_int, c_void, CStr, CString};
-use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock};
+use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
+use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use windows_sys::Win32::Foundation::{HMODULE, HWND};
-use windows_sys::Win32::Graphics::Gdi::{GetDC, ReleaseDC, HDC};
-use windows_sys::Win32::Graphics::OpenGL::{
-    wglCreateContext, wglDeleteContext, wglGetProcAddress, wglMakeCurrent, ChoosePixelFormat, SetPixelFormat, HGLRC,
-    PFD_DOUBLEBUFFER, PFD_DRAW_TO_WINDOW, PFD_SUPPORT_OPENGL, PFD_TYPE_RGBA, PIXELFORMATDESCRIPTOR,
-};
-use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
-use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WS_POPUP};
-
-static COMPRESSED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libmpv-2.dll.zst"));
 
 const FORMAT_FLAG: c_int = 3;
 const FORMAT_DOUBLE: c_int = 5;
@@ -36,30 +30,13 @@ const EVENT_PLAYBACK_RESTART: c_int = 21;
 const EVENT_PROPERTY_CHANGE: c_int = 22;
 const SEEK_TIMEOUT: Duration = Duration::from_millis(800);
 const RENDER_API_TYPE: c_int = 1;
-const RENDER_OPENGL_INIT: c_int = 2;
-const RENDER_OPENGL_FBO: c_int = 3;
 const RENDER_BLOCK_FOR_TARGET_TIME: c_int = 12;
 const RENDER_UPDATE_FRAME: u64 = 1;
-const GL_RGBA8: c_int = 0x8058;
 
 #[repr(C)]
 struct RenderParam {
     kind: c_int,
     data: *mut c_void,
-}
-
-#[repr(C)]
-struct OpenGlInit {
-    get_proc_address: extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
-    context: *mut c_void,
-}
-
-#[repr(C)]
-struct OpenGlFbo {
-    fbo: c_int,
-    width: c_int,
-    height: c_int,
-    internal_format: c_int,
 }
 
 #[repr(C)]
@@ -99,9 +76,18 @@ struct Api {
     _library: Library,
 }
 
+#[cfg(windows)]
+static COMPRESSED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libmpv-2.dll.zst"));
+
+#[cfg(windows)]
+fn open_library() -> Result<Library, String> {
+    let path = extract_dll()?;
+    unsafe { Library::new(&path).map_err(|e| format!("libmpv : {e}")) }
+}
+
+#[cfg(windows)]
 fn extract_dll() -> Result<PathBuf, String> {
-    let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-    let folder = base.join("MX-LAB");
+    let folder = mx_lab::paths::data_dir();
     std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
     // La taille compressée distingue les versions embarquées
     let target = folder.join(format!("libmpv-{}.dll", COMPRESSED.len()));
@@ -124,11 +110,30 @@ fn extract_dll() -> Result<PathBuf, String> {
     Ok(target)
 }
 
+#[cfg(not(windows))]
+fn open_library() -> Result<Library, String> {
+    let names: &[&str] = if cfg!(target_os = "macos") {
+        &["libmpv.2.dylib", "libmpv.dylib"]
+    } else {
+        &["libmpv.so.2", "libmpv.so.1", "libmpv.so"]
+    };
+    // Celle livrée avec l'app ou de Homebrew d'abord, puis le chargeur du système
+    let found = mx_lab::paths::find_tool(names).map(|path| path.into_os_string());
+    let mut last_error = String::new();
+    for name in found.into_iter().chain(names.iter().map(|name| (*name).into())) {
+        match unsafe { Library::new(&name) } {
+            Ok(library) => return Ok(library),
+            Err(error) => last_error = error.to_string(),
+        }
+    }
+    let hint = if cfg!(target_os = "macos") { "brew install mpv" } else { "installer libmpv, paquet libmpv2" };
+    Err(format!("libmpv introuvable ({hint}) : {last_error}"))
+}
+
 impl Api {
     fn load() -> Result<Self, String> {
-        let path = extract_dll()?;
+        let library = open_library()?;
         unsafe {
-            let library = Library::new(&path).map_err(|e| format!("libmpv : {e}"))?;
             macro_rules! symbol {
                 ($name:literal) => {
                     *library.get(concat!($name, "\0").as_bytes()).map_err(|e| format!("libmpv : {e}"))?
@@ -155,78 +160,282 @@ impl Api {
     }
 }
 
-/// Adresse d'une fonction OpenGL du contexte courant. Les fonctions de base ne sont
-/// connues que d'opengl32.dll : wglGetProcAddress rend alors une valeur nulle ou 1, 2, 3, -1.
-unsafe fn gl_function(name: *const c_char) -> *mut c_void {
-    static OPENGL32: OnceLock<usize> = OnceLock::new();
-    if let Some(function) = wglGetProcAddress(name as *const u8) {
-        if !matches!(function as usize, 1 | 2 | 3 | usize::MAX) {
-            return function as *mut c_void;
-        }
+/// Rendu OpenGL dans une fenêtre invisible, relu en mémoire (Windows).
+#[cfg(windows)]
+mod target {
+    use super::*;
+    use glow::HasContext;
+    use std::sync::OnceLock;
+    use windows_sys::Win32::Foundation::{HMODULE, HWND};
+    use windows_sys::Win32::Graphics::Gdi::{GetDC, ReleaseDC, HDC};
+    use windows_sys::Win32::Graphics::OpenGL::{
+        wglCreateContext, wglDeleteContext, wglGetProcAddress, wglMakeCurrent, ChoosePixelFormat, SetPixelFormat,
+        HGLRC, PFD_DOUBLEBUFFER, PFD_DRAW_TO_WINDOW, PFD_SUPPORT_OPENGL, PFD_TYPE_RGBA, PIXELFORMATDESCRIPTOR,
+    };
+    use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WS_POPUP};
+
+    const RENDER_OPENGL_INIT: c_int = 2;
+    const RENDER_OPENGL_FBO: c_int = 3;
+    const GL_RGBA8: c_int = 0x8058;
+
+    #[repr(C)]
+    struct OpenGlInit {
+        get_proc_address: extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
+        context: *mut c_void,
     }
-    let module = *OPENGL32.get_or_init(|| LoadLibraryA(c"opengl32.dll".as_ptr() as *const u8) as usize) as HMODULE;
-    GetProcAddress(module, name as *const u8).map_or(std::ptr::null_mut(), |function| function as *mut c_void)
-}
 
-extern "C" fn get_proc_address(_context: *mut c_void, name: *const c_char) -> *mut c_void {
-    unsafe { gl_function(name) }
-}
-
-/// Contexte OpenGL sans rien à l'écran : la fenêtre n'est jamais montrée, ni le tampon présenté.
-struct HiddenGl {
-    window: HWND,
-    dc: HDC,
-    context: HGLRC,
-}
-
-impl HiddenGl {
-    unsafe fn open() -> Result<Self, String> {
-        let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
-        let window = CreateWindowExW(
-            0,
-            class.as_ptr(),
-            std::ptr::null(),
-            WS_POPUP,
-            0,
-            0,
-            16,
-            16,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null(),
-        );
-        if window.is_null() {
-            return Err("création de la fenêtre OpenGL impossible".into());
-        }
-        let mut hidden = HiddenGl { window, dc: GetDC(window), context: std::ptr::null_mut() };
-        let mut format: PIXELFORMATDESCRIPTOR = std::mem::zeroed();
-        format.nSize = std::mem::size_of::<PIXELFORMATDESCRIPTOR>() as u16;
-        format.nVersion = 1;
-        format.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
-        format.iPixelType = PFD_TYPE_RGBA as _;
-        format.cColorBits = 32;
-        let index = ChoosePixelFormat(hidden.dc, &format);
-        if index == 0 || SetPixelFormat(hidden.dc, index, &format) == 0 {
-            return Err("format de pixels OpenGL refusé".into());
-        }
-        hidden.context = wglCreateContext(hidden.dc);
-        if hidden.context.is_null() || wglMakeCurrent(hidden.dc, hidden.context) == 0 {
-            return Err("contexte OpenGL impossible".into());
-        }
-        Ok(hidden)
+    #[repr(C)]
+    struct OpenGlFbo {
+        fbo: c_int,
+        width: c_int,
+        height: c_int,
+        internal_format: c_int,
     }
-}
 
-impl Drop for HiddenGl {
-    fn drop(&mut self) {
-        unsafe {
-            if !self.context.is_null() {
-                wglMakeCurrent(std::ptr::null_mut(), std::ptr::null_mut());
-                wglDeleteContext(self.context);
+    /// Adresse d'une fonction OpenGL du contexte courant. Les fonctions de base ne sont
+    /// connues que d'opengl32.dll : wglGetProcAddress rend alors une valeur nulle ou 1, 2, 3, -1.
+    unsafe fn gl_function(name: *const c_char) -> *mut c_void {
+        static OPENGL32: OnceLock<usize> = OnceLock::new();
+        if let Some(function) = wglGetProcAddress(name as *const u8) {
+            if !matches!(function as usize, 1 | 2 | 3 | usize::MAX) {
+                return function as *mut c_void;
             }
-            ReleaseDC(self.window, self.dc);
-            DestroyWindow(self.window);
+        }
+        let module = *OPENGL32.get_or_init(|| LoadLibraryA(c"opengl32.dll".as_ptr() as *const u8) as usize) as HMODULE;
+        GetProcAddress(module, name as *const u8).map_or(std::ptr::null_mut(), |function| function as *mut c_void)
+    }
+
+    extern "C" fn get_proc_address(_context: *mut c_void, name: *const c_char) -> *mut c_void {
+        unsafe { gl_function(name) }
+    }
+
+    /// Contexte OpenGL sans rien à l'écran : la fenêtre n'est jamais montrée, ni le tampon présenté.
+    struct HiddenGl {
+        window: HWND,
+        dc: HDC,
+        context: HGLRC,
+    }
+
+    impl HiddenGl {
+        unsafe fn open() -> Result<Self, String> {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let window = CreateWindowExW(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                WS_POPUP,
+                0,
+                0,
+                16,
+                16,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            );
+            if window.is_null() {
+                return Err("création de la fenêtre OpenGL impossible".into());
+            }
+            let mut hidden = HiddenGl { window, dc: GetDC(window), context: std::ptr::null_mut() };
+            let mut format: PIXELFORMATDESCRIPTOR = std::mem::zeroed();
+            format.nSize = std::mem::size_of::<PIXELFORMATDESCRIPTOR>() as u16;
+            format.nVersion = 1;
+            format.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
+            format.iPixelType = PFD_TYPE_RGBA as _;
+            format.cColorBits = 32;
+            let index = ChoosePixelFormat(hidden.dc, &format);
+            if index == 0 || SetPixelFormat(hidden.dc, index, &format) == 0 {
+                return Err("format de pixels OpenGL refusé".into());
+            }
+            hidden.context = wglCreateContext(hidden.dc);
+            if hidden.context.is_null() || wglMakeCurrent(hidden.dc, hidden.context) == 0 {
+                return Err("contexte OpenGL impossible".into());
+            }
+            Ok(hidden)
+        }
+    }
+
+    impl Drop for HiddenGl {
+        fn drop(&mut self) {
+            unsafe {
+                if !self.context.is_null() {
+                    wglMakeCurrent(std::ptr::null_mut(), std::ptr::null_mut());
+                    wglDeleteContext(self.context);
+                }
+                ReleaseDC(self.window, self.dc);
+                DestroyWindow(self.window);
+            }
+        }
+    }
+
+    pub(super) struct Target {
+        api: Arc<Api>,
+        render: Handle,
+        gl: glow::Context,
+        texture: glow::Texture,
+        framebuffer: glow::Framebuffer,
+        // Détruit en dernier : les champs tombent dans l'ordre de déclaration
+        _hidden: HiddenGl,
+    }
+
+    impl Target {
+        /// À créer sur le fil de rendu : le contexte OpenGL y reste attaché.
+        pub(super) unsafe fn new(api: Arc<Api>, handle: Handle) -> Result<Self, String> {
+            let hidden = HiddenGl::open()?;
+            let gl = glow::Context::from_loader_function_cstr(|name| gl_function(name.as_ptr()) as *const c_void);
+            let mut init = OpenGlInit { get_proc_address, context: std::ptr::null_mut() };
+            let mut params = [
+                RenderParam { kind: RENDER_API_TYPE, data: c"opengl".as_ptr() as *mut c_void },
+                RenderParam { kind: RENDER_OPENGL_INIT, data: &mut init as *mut _ as *mut c_void },
+                RenderParam { kind: 0, data: std::ptr::null_mut() },
+            ];
+            let mut render: Handle = std::ptr::null_mut();
+            if (api.render_create)(&mut render, handle, params.as_mut_ptr()) < 0 {
+                return Err("libmpv : rendu OpenGL impossible".into());
+            }
+            match (gl.create_texture(), gl.create_framebuffer()) {
+                (Ok(texture), Ok(framebuffer)) => Ok(Target { api, render, gl, texture, framebuffer, _hidden: hidden }),
+                _ => {
+                    (api.render_free)(render);
+                    Err("texture de la vidéo impossible".into())
+                }
+            }
+        }
+
+        pub(super) fn render_handle(&self) -> Handle {
+            self.render
+        }
+
+        pub(super) unsafe fn resize(&mut self, width: i32, height: i32) {
+            let gl = &self.gl;
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.texture));
+            for parameter in [glow::TEXTURE_MIN_FILTER, glow::TEXTURE_MAG_FILTER] {
+                gl.tex_parameter_i32(glow::TEXTURE_2D, parameter, glow::LINEAR as i32);
+            }
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                GL_RGBA8,
+                width,
+                height,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(None),
+            );
+            gl.bind_texture(glow::TEXTURE_2D, None);
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.framebuffer));
+            gl.framebuffer_texture_2d(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(self.texture), 0);
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        }
+
+        pub(super) unsafe fn render(&mut self, width: i32, height: i32) -> Vec<Color32> {
+            let gl = &self.gl;
+            let mut fbo = OpenGlFbo { fbo: self.framebuffer.0.get() as c_int, width, height, internal_format: GL_RGBA8 };
+            // Sans attendre l'heure d'affichage : mpv appelle quand l'image est due
+            let mut block: c_int = 0;
+            let mut params = [
+                RenderParam { kind: RENDER_OPENGL_FBO, data: &mut fbo as *mut _ as *mut c_void },
+                RenderParam { kind: RENDER_BLOCK_FOR_TARGET_TIME, data: &mut block as *mut _ as *mut c_void },
+                RenderParam { kind: 0, data: std::ptr::null_mut() },
+            ];
+            (self.api.render_render)(self.render, params.as_mut_ptr());
+
+            let mut pixels = vec![Color32::BLACK; width as usize * height as usize];
+            let bytes = std::slice::from_raw_parts_mut(pixels.as_mut_ptr() as *mut u8, pixels.len() * 4);
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.framebuffer));
+            gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
+            gl.pixel_store_i32(glow::PACK_ALIGNMENT, 1);
+            gl.read_pixels(0, 0, width, height, glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelPackData::Slice(Some(bytes)));
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            for pixel in bytes.chunks_exact_mut(4) {
+                pixel[3] = 255;
+            }
+            pixels
+        }
+    }
+
+    impl Drop for Target {
+        fn drop(&mut self) {
+            unsafe {
+                // Le contexte de rendu de mpv d'abord, tant que le contexte OpenGL existe
+                (self.api.render_free)(self.render);
+                self.gl.delete_framebuffer(self.framebuffer);
+                self.gl.delete_texture(self.texture);
+            }
+        }
+    }
+}
+
+/// Rendu logiciel de mpv, directement en mémoire (macOS, Linux).
+#[cfg(not(windows))]
+mod target {
+    use super::*;
+
+    const RENDER_SW_SIZE: c_int = 17;
+    const RENDER_SW_FORMAT: c_int = 18;
+    const RENDER_SW_STRIDE: c_int = 19;
+    const RENDER_SW_POINTER: c_int = 20;
+
+    /// mpv écrit plus vite dans une mémoire alignée sur 64 octets.
+    #[derive(Clone, Copy)]
+    #[repr(C, align(64))]
+    struct Block([u8; 64]);
+
+    pub(super) struct Target {
+        api: Arc<Api>,
+        render: Handle,
+        buffer: Vec<Block>,
+    }
+
+    impl Target {
+        pub(super) unsafe fn new(api: Arc<Api>, handle: Handle) -> Result<Self, String> {
+            let mut params = [
+                RenderParam { kind: RENDER_API_TYPE, data: c"sw".as_ptr() as *mut c_void },
+                RenderParam { kind: 0, data: std::ptr::null_mut() },
+            ];
+            let mut render: Handle = std::ptr::null_mut();
+            if (api.render_create)(&mut render, handle, params.as_mut_ptr()) < 0 {
+                return Err("libmpv : rendu logiciel impossible".into());
+            }
+            Ok(Target { api, render, buffer: Vec::new() })
+        }
+
+        pub(super) fn render_handle(&self) -> Handle {
+            self.render
+        }
+
+        pub(super) unsafe fn resize(&mut self, _width: i32, _height: i32) {}
+
+        pub(super) unsafe fn render(&mut self, width: i32, height: i32) -> Vec<Color32> {
+            let (columns, rows) = (width as usize, height as usize);
+            let stride = (columns * 4).div_ceil(64) * 64;
+            self.buffer.resize(stride / 64 * rows, Block([0; 64]));
+            let mut size = [width, height];
+            let mut stride_value: usize = stride;
+            let mut block: c_int = 0;
+            let mut params = [
+                RenderParam { kind: RENDER_SW_SIZE, data: size.as_mut_ptr() as *mut c_void },
+                RenderParam { kind: RENDER_SW_FORMAT, data: c"rgb0".as_ptr() as *mut c_void },
+                RenderParam { kind: RENDER_SW_STRIDE, data: &mut stride_value as *mut _ as *mut c_void },
+                RenderParam { kind: RENDER_SW_POINTER, data: self.buffer.as_mut_ptr() as *mut c_void },
+                RenderParam { kind: RENDER_BLOCK_FOR_TARGET_TIME, data: &mut block as *mut _ as *mut c_void },
+                RenderParam { kind: 0, data: std::ptr::null_mut() },
+            ];
+            (self.api.render_render)(self.render, params.as_mut_ptr());
+            let bytes = std::slice::from_raw_parts(self.buffer.as_ptr() as *const u8, stride * rows);
+            let mut pixels = Vec::with_capacity(columns * rows);
+            for row in bytes.chunks_exact(stride) {
+                pixels.extend(row[..columns * 4].chunks_exact(4).map(|p| Color32::from_rgb(p[0], p[1], p[2])));
+            }
+            pixels
+        }
+    }
+
+    impl Drop for Target {
+        fn drop(&mut self) {
+            unsafe { (self.api.render_free)(self.render) };
         }
     }
 }
@@ -274,34 +483,14 @@ unsafe impl Send for SendHandle {}
 
 fn render_thread(api: Arc<Api>, handle: SendHandle, shared: Arc<RenderShared>, ready: mpsc::Sender<Result<(), String>>) {
     unsafe {
-        let hidden = match HiddenGl::open() {
-            Ok(hidden) => hidden,
+        let mut target = match target::Target::new(api.clone(), handle.0) {
+            Ok(target) => target,
             Err(error) => {
                 let _ = ready.send(Err(error));
                 return;
             }
         };
-        let gl = glow::Context::from_loader_function_cstr(|name| gl_function(name.as_ptr()) as *const c_void);
-        let mut init = OpenGlInit { get_proc_address, context: std::ptr::null_mut() };
-        let mut params = [
-            RenderParam { kind: RENDER_API_TYPE, data: c"opengl".as_ptr() as *mut c_void },
-            RenderParam { kind: RENDER_OPENGL_INIT, data: &mut init as *mut _ as *mut c_void },
-            RenderParam { kind: 0, data: std::ptr::null_mut() },
-        ];
-        let mut render: Handle = std::ptr::null_mut();
-        if (api.render_create)(&mut render, handle.0, params.as_mut_ptr()) < 0 {
-            let _ = ready.send(Err("libmpv : rendu OpenGL impossible".into()));
-            return;
-        }
-        (api.render_set_update_callback)(render, wake_render, Arc::as_ptr(&shared) as *mut c_void);
-        let (texture, framebuffer) = match (gl.create_texture(), gl.create_framebuffer()) {
-            (Ok(texture), Ok(framebuffer)) => (texture, framebuffer),
-            _ => {
-                (api.render_free)(render);
-                let _ = ready.send(Err("texture de la vidéo impossible".into()));
-                return;
-            }
-        };
+        (api.render_set_update_callback)(target.render_handle(), wake_render, Arc::as_ptr(&shared) as *mut c_void);
         let _ = ready.send(Ok(()));
 
         let mut size = [0, 0];
@@ -324,61 +513,18 @@ fn render_thread(api: Arc<Api>, handle: SendHandle, shared: Arc<RenderShared>, r
             }
             if size != wanted {
                 size = wanted;
-                gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-                for parameter in [glow::TEXTURE_MIN_FILTER, glow::TEXTURE_MAG_FILTER] {
-                    gl.tex_parameter_i32(glow::TEXTURE_2D, parameter, glow::LINEAR as i32);
-                }
-                gl.tex_image_2d(
-                    glow::TEXTURE_2D,
-                    0,
-                    GL_RGBA8,
-                    width,
-                    height,
-                    0,
-                    glow::RGBA,
-                    glow::UNSIGNED_BYTE,
-                    glow::PixelUnpackData::Slice(None),
-                );
-                gl.bind_texture(glow::TEXTURE_2D, None);
-                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
-                gl.framebuffer_texture_2d(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(texture), 0);
-                gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+                target.resize(width, height);
                 force = true;
             }
-            let frame_ready = dirty && (api.render_update)(render) & RENDER_UPDATE_FRAME != 0;
+            let frame_ready = dirty && (api.render_update)(target.render_handle()) & RENDER_UPDATE_FRAME != 0;
             if !frame_ready && !force {
                 continue;
             }
             force = false;
-
-            let mut fbo = OpenGlFbo { fbo: framebuffer.0.get() as c_int, width, height, internal_format: GL_RGBA8 };
-            // Sans attendre l'heure d'affichage : mpv appelle quand l'image est due
-            let mut block: c_int = 0;
-            let mut params = [
-                RenderParam { kind: RENDER_OPENGL_FBO, data: &mut fbo as *mut _ as *mut c_void },
-                RenderParam { kind: RENDER_BLOCK_FOR_TARGET_TIME, data: &mut block as *mut _ as *mut c_void },
-                RenderParam { kind: 0, data: std::ptr::null_mut() },
-            ];
-            (api.render_render)(render, params.as_mut_ptr());
-
-            let mut pixels = vec![Color32::BLACK; width as usize * height as usize];
-            let bytes = std::slice::from_raw_parts_mut(pixels.as_mut_ptr() as *mut u8, pixels.len() * 4);
-            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
-            gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
-            gl.pixel_store_i32(glow::PACK_ALIGNMENT, 1);
-            gl.read_pixels(0, 0, width, height, glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelPackData::Slice(Some(bytes)));
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-            for pixel in bytes.chunks_exact_mut(4) {
-                pixel[3] = 255;
-            }
+            let pixels = target.render(width, height);
             shared.slot.lock().unwrap().frame = Some(VideoFrame { size: [width as usize, height as usize], pixels });
             shared.ctx.request_repaint();
         }
-        (api.render_free)(render);
-        gl.delete_framebuffer(framebuffer);
-        gl.delete_texture(texture);
-        drop(gl);
-        drop(hidden);
     }
 }
 

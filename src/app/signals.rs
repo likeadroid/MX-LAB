@@ -1122,8 +1122,7 @@ pub fn cache_path(video: &Path, kind: &str) -> Option<PathBuf> {
     for byte in identity.bytes() {
         hash = (hash ^ byte as u64).wrapping_mul(0x100000001b3);
     }
-    let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-    let folder = base.join("MX-LAB").join("studio-cache");
+    let folder = mx_lab::paths::data_dir().join("studio-cache");
     std::fs::create_dir_all(&folder).ok()?;
     Some(folder.join(format!("{hash:016x}.{kind}.zst")))
 }

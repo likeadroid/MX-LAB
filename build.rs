@@ -1,5 +1,6 @@
-// Compresse ffmpeg et libmpv une fois pour toutes : les exe les embarquent et les
-// extraient au 1er lancement.
+// Sous Windows : compresse ffmpeg et libmpv une fois pour toutes (l'exe les embarque et les
+// extrait au 1er lancement) et donne son icône à l'exe. Ailleurs, rien à faire : ffmpeg et
+// libmpv viennent du paquet de l'app ou du système.
 use std::{env, fs, path::Path};
 
 fn compress(source: &str, name: &str) {
@@ -73,6 +74,9 @@ fn studio_icon() {
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
     studio_icon();
     compress("ffmpeg-min/ffmpeg.exe", "ffmpeg.exe.zst");
     compress("vendor/libmpv/libmpv-2.dll", "libmpv-2.dll.zst");

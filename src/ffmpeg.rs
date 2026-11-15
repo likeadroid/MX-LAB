@@ -1,19 +1,31 @@
-//! ffmpeg embarqué, extrait une fois dans le dossier local de l'utilisateur.
+//! ffmpeg : sous Windows, embarqué et extrait une fois dans le dossier local de l'utilisateur ;
+//! ailleurs, livré à côté de l'exécutable ou installé sur le système.
 
-use std::fs;
 use std::io::{self, Read};
-use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
 
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-static COMPRESSED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ffmpeg.exe.zst"));
 static PATH: OnceLock<Result<PathBuf, String>> = OnceLock::new();
 
+#[cfg(windows)]
+static COMPRESSED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ffmpeg.exe.zst"));
+
+#[cfg(windows)]
+fn locate() -> Result<PathBuf, String> {
+    extract().map_err(|e| format!("extraction de ffmpeg impossible : {e}"))
+}
+
+#[cfg(not(windows))]
+fn locate() -> Result<PathBuf, String> {
+    // Sinon, celui du PATH : un terminal en a souvent un ailleurs
+    Ok(crate::paths::find_tool(&["ffmpeg"]).unwrap_or_else(|| PathBuf::from("ffmpeg")))
+}
+
+#[cfg(windows)]
 fn extract() -> io::Result<PathBuf> {
-    let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-    let folder = base.join("MX-LAB");
+    use std::fs;
+    let folder = crate::paths::data_dir();
     fs::create_dir_all(&folder)?;
     // La taille compressée distingue les versions de ffmpeg embarquées
     let target = folder.join(format!("ffmpeg-{}.exe", COMPRESSED.len()));
@@ -35,9 +47,15 @@ fn extract() -> io::Result<PathBuf> {
 }
 
 fn command() -> Result<Command, String> {
-    let path = PATH.get_or_init(|| extract().map_err(|e| format!("extraction de ffmpeg impossible : {e}")));
+    let path = PATH.get_or_init(locate);
     let mut command = Command::new(path.as_ref().map_err(Clone::clone)?);
-    command.creation_flags(CREATE_NO_WINDOW).stdin(Stdio::null());
+    command.stdin(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
     Ok(command)
 }
 

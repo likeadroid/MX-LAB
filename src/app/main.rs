@@ -1720,7 +1720,7 @@ impl App {
                     }
                 });
                 ui.menu_button("Rendu", |ui| {
-                    for backend in renderer::RenderBackend::ALL {
+                    for &backend in renderer::RenderBackend::ALL {
                         if menu_check(ui, self.render_choice == backend, backend.label()).clicked() && self.render_choice != backend {
                             self.render_choice = backend;
                             backend.save();
@@ -1744,7 +1744,7 @@ impl App {
             }
             if let Some(folder) = self.last_export.clone() {
                 if ui.small_button("Ouvrir le dossier").clicked() {
-                    let _ = std::process::Command::new("explorer").arg(folder).spawn();
+                    mx_lab::paths::reveal(&folder);
                 }
             }
         });

@@ -1,0 +1,43 @@
+# Compile et teste MX-LAB sous macOS et Linux. Windows se vérifie en local : son exe embarque
+# ffmpeg et libmpv, qui ne sont pas dans le dépôt.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dépendances (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libmpv2
+
+      - name: Dépendances (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg mpv
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tests
+        run: cargo test --profile studio-dev
+
+      - name: Compilation
+        run: cargo build --profile studio-dev
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mx-lab-${{ runner.os }}
+          path: target/studio-dev/mx-lab
