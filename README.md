@@ -22,6 +22,9 @@ L'exe est créé dans `target/release/mx-lab.exe`. Pour itérer plus vite : `car
 ## Plateformes
 Windows pour l'instant. Les portages macOS et Linux sont prévus.
 
+## Licence
+GPL-3.0, voir `LICENSE`.
+
 ## Crédits
 - [YAMNet](https://github.com/tensorflow/models/tree/master/research/audioset/yamnet) (Apache 2.0)
 - Police [Inter](https://rsms.me/inter/) (SIL Open Font License, `assets/fonts/OFL-Inter.txt`)
