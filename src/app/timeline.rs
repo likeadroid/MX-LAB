@@ -2113,6 +2113,11 @@ fn smooth_curve(curve: &[f64], step: f64, view: View, width: usize) -> Vec<f64> 
     }
     let per_column = view.span / width as f64;
     let radius = ((step / per_column * 0.75) as usize).clamp(2, 40);
+    // Trois moyennes glissantes à la suite : une cloche. Une seule ferait d'une pointe brève,
+    // vue de loin, un plateau de plusieurs colonnes.
+    const PASSES: usize = 3;
+    let pass_radius = radius.div_ceil(2);
+    let margin = pass_radius * PASSES;
     let raw = |column: isize| -> f64 {
         let t0 = view.start + column as f64 * per_column;
         let t1 = t0 + per_column;
@@ -2130,17 +2135,21 @@ fn smooth_curve(curve: &[f64], step: f64, view: View, width: usize) -> Vec<f64> 
         let fraction = position - index as f64;
         curve[index] * (1.0 - fraction) + curve[next] * fraction
     };
-    let values: Vec<f64> = (-(radius as isize)..(width + radius) as isize).map(raw).collect();
-    let mut sum: f64 = values[..=2 * radius].iter().sum();
-    let count = (2 * radius + 1) as f64;
-    let mut out = Vec::with_capacity(width);
-    for column in 0..width {
-        out.push((sum / count).max(0.0));
-        if column + 1 < width {
-            sum += values[column + 2 * radius + 1] - values[column];
+    let mut values: Vec<f64> = (-(margin as isize)..(width + margin) as isize).map(raw).collect();
+    let count = (2 * pass_radius + 1) as f64;
+    for _ in 0..PASSES {
+        let length = values.len() - 2 * pass_radius;
+        let mut sum: f64 = values[..2 * pass_radius + 1].iter().sum();
+        let mut next = Vec::with_capacity(length);
+        for index in 0..length {
+            next.push(sum / count);
+            if index + 1 < length {
+                sum += values[index + 2 * pass_radius + 1] - values[index];
+            }
         }
+        values = next;
     }
-    out
+    values.into_iter().map(|value| value.max(0.0)).collect()
 }
 
 /// Bouton S ou M du mixeur, plein quand il est actif.
@@ -2560,6 +2569,21 @@ mod tests {
         assert!((middle - 0.5).abs() < 1e-5, "le curseur et la ligne avancent ensemble : {middle}");
         assert_eq!(music_scale(1.0), 1.0, "au-delà : rogné");
         assert_eq!(music_scale(0.0), 0.0);
+    }
+
+    #[test]
+    fn a_brief_peak_seen_from_afar_has_no_flat_top() {
+        // Deux heures sur 1000 colonnes, une seule mesure non nulle
+        let mut curve = vec![0.0; (7200.0 / detect::STEP) as usize];
+        let middle = curve.len() / 2;
+        curve[middle] = 1.0;
+        let levels = smooth_curve(&curve, detect::STEP, View { start: 0.0, span: 7200.0 }, 1000);
+        let peak = levels.iter().cloned().fold(0.0, f64::max);
+        assert_eq!(levels.iter().filter(|&&v| v == peak).count(), 1, "un seul sommet");
+        let center = levels.iter().position(|&v| v == peak).unwrap();
+        for side in [&levels[center - 3..=center], &levels[center..=center + 3]] {
+            assert!(side.windows(2).all(|pair| pair[0] != pair[1]), "pas de palier : {side:?}");
+        }
     }
 
     #[test]
