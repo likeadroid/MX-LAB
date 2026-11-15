@@ -30,7 +30,7 @@ pub fn label(path: &Path) -> String {
 impl RecentProjects {
     pub fn load() -> Self {
         let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-        Self::load_from(base.join("music-sequence-extractor").join("studio-recent.json"))
+        Self::load_from(base.join("MX-LAB").join("studio-recent.json"))
     }
 
     fn load_from(file: PathBuf) -> Self {

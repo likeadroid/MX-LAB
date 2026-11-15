@@ -16,7 +16,7 @@ const FFT_LENGTH: usize = 512;
 const BINS: usize = 257;
 const MELS: usize = 64;
 
-static MODEL: &[u8] = include_bytes!("../../models/yamnet.tflite");
+static MODEL: &[u8] = include_bytes!("../models/yamnet.tflite");
 
 /// Noms des 521 classes, rangés dans le fichier du modèle.
 pub fn class_labels() -> Vec<&'static str> {

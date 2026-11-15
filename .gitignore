@@ -1,23 +1,17 @@
 # Compilation
-/rust/target/
-/build/
-/dist/
-__pycache__/
-*.pyc
-
-# Environnement Python
-/.venv/
+/target/
 
 # Binaires tiers, trop lourds pour le dépôt (à garder sur le disque pour compiler)
 /bin/
 /ffmpeg/
 /ffmpeg-min/
-/rust/vendor/libmpv/
+/vendor/libmpv/
 
 # Vidéos et projets de travail
 /Severance/
 *.mkv
 *.mp4
+*.mx-lab.json
 *.music-studio.json
 
 # Réglages locaux de Claude Code

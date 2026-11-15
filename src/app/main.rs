@@ -1,6 +1,6 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
-//! Music Studio : étudier la musique à l'image.
+//! MX-LAB : étudier la musique à l'image.
 //! Timeline de la vidéo, détection de la musique, onde, spectre, loudness, lecteur précis,
 //! correction et export des séquences.
 
@@ -16,9 +16,9 @@ mod signals;
 mod timeline;
 
 use eframe::egui::{self, Color32, RichText};
-use mse::detect;
+use mx_lab::detect;
 use monitor::Monitor;
-use mse::yamnet::Yamnet;
+use mx_lab::yamnet::Yamnet;
 use project::{MusicKind, Origin, Project, Segment};
 use release_name::ReleaseInfo;
 use signals::{Detail, Signals, Strip};
@@ -1530,8 +1530,8 @@ impl App {
             self.open(ctx, path);
         }
 
-        let title = self.media.as_ref().map_or("Music Studio".to_string(), |m| {
-            format!("{}{} — Music Studio", if m.dirty { "* " } else { "" }, m.path.file_name().unwrap_or_default().to_string_lossy())
+        let title = self.media.as_ref().map_or("MX-LAB".to_string(), |m| {
+            format!("{}{} — MX-LAB", if m.dirty { "* " } else { "" }, m.path.file_name().unwrap_or_default().to_string_lossy())
         });
         if title != self.title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
@@ -2574,8 +2574,8 @@ fn interface_fonts() -> egui::FontDefinitions {
     // Inter dessine plus large que la police d'egui : les colonnes denses doivent tenir
     const INTER_SCALE: f32 = 0.94;
     let mut fonts = egui::FontDefinitions::default();
-    let regular: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
-    let medium: &[u8] = include_bytes!("../../../assets/fonts/Inter-Medium.ttf");
+    let regular: &[u8] = include_bytes!("../../assets/fonts/Inter-Regular.ttf");
+    let medium: &[u8] = include_bytes!("../../assets/fonts/Inter-Medium.ttf");
     for (name, data) in [("Inter", regular), ("Inter Medium", medium)] {
         let tweak = egui::FontTweak { scale: INTER_SCALE, ..Default::default() };
         fonts.font_data.insert(name.to_owned(), Arc::new(egui::FontData::from_static(data).tweak(tweak)));
@@ -2703,7 +2703,7 @@ fn main() -> eframe::Result {
             .with_drag_and_drop(true),
         ..Default::default()
     };
-    let result = eframe::run_native("Music Studio", options, Box::new(|cc| Ok(Box::new(App::from_creation(cc)))));
+    let result = eframe::run_native("MX-LAB", options, Box::new(|cc| Ok(Box::new(App::from_creation(cc)))));
     // Un moteur qui ne démarre pas ne doit pas empêcher le prochain lancement
     if result.is_err() {
         renderer::RenderBackend::default().save();
@@ -4230,7 +4230,7 @@ mod tests {
         let folder = std::env::temp_dir().join(format!("music-studio-live-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let source = folder.join("source.wav");
-        let (log, ok) = mse::ffmpeg::run(&[
+        let (log, ok) = mx_lab::ffmpeg::run(&[
             std::ffi::OsStr::new("-y"),
             std::ffi::OsStr::new("-f"),
             std::ffi::OsStr::new("lavfi"),

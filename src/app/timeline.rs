@@ -4,7 +4,7 @@ use crate::project::{LoudnessTarget, Origin};
 use crate::signals::{self, Peaks, BLOCK_S, DETAIL_BINS, F_MAX, F_MIN, NO_LOUDNESS, OVERVIEW_BINS};
 use crate::{tc, App, Job};
 use eframe::egui::{self, Align2, Color32, FontId, Mesh, Pos2, Rect, Sense, Shape, Stroke, TextureOptions};
-use mse::detect;
+use mx_lab::detect;
 use rayon::prelude::*;
 use std::sync::OnceLock;
 use std::time::Instant;

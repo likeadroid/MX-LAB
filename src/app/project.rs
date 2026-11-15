@@ -120,7 +120,13 @@ pub struct Project {
 
 pub fn project_path(video: &Path) -> PathBuf {
     let stem = video.file_stem().unwrap_or_default().to_string_lossy();
-    video.with_file_name(format!("{stem}.music-studio.json"))
+    let path = video.with_file_name(format!("{stem}.mx-lab.json"));
+    // Projet créé sous l'ancien nom (Music Studio) : on le reprend
+    let old = video.with_file_name(format!("{stem}.music-studio.json"));
+    if !path.exists() && old.is_file() {
+        let _ = std::fs::rename(&old, &path);
+    }
+    path
 }
 
 impl Project {
@@ -344,7 +350,7 @@ mod tests {
     fn project_file_sits_next_to_the_video() {
         assert_eq!(
             project_path(Path::new("C:\\films\\Mon.Film.2024.mkv")),
-            Path::new("C:\\films\\Mon.Film.2024.music-studio.json")
+            Path::new("C:\\films\\Mon.Film.2024.mx-lab.json")
         );
     }
 
@@ -450,7 +456,7 @@ mod tests {
     fn project_survives_the_file() {
         let folder = std::env::temp_dir().join(format!("music-studio-project-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
-        let path = folder.join("film.music-studio.json");
+        let path = folder.join("film.mx-lab.json");
         let mut project = project();
         project.scores = vec![0.125, 0.5];
         project.segments[0].name = "Thème d'ouverture".into();

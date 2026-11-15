@@ -38,7 +38,7 @@ impl RenderBackend {
 
     fn path() -> PathBuf {
         let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-        base.join("music-sequence-extractor").join("studio-renderer.txt")
+        base.join("MX-LAB").join("studio-renderer.txt")
     }
 
     pub fn load() -> Self {

@@ -13,7 +13,7 @@ static PATH: OnceLock<Result<PathBuf, String>> = OnceLock::new();
 
 fn extract() -> io::Result<PathBuf> {
     let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-    let folder = base.join("music-sequence-extractor");
+    let folder = base.join("MX-LAB");
     fs::create_dir_all(&folder)?;
     // La taille compressée distingue les versions de ffmpeg embarquées
     let target = folder.join(format!("ffmpeg-{}.exe", COMPRESSED.len()));

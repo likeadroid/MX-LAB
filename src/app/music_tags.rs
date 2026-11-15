@@ -2,8 +2,8 @@
 //! Ces classes sont très discrètes sur une musique de film (souvent moins de 1 %) :
 //! on les lit comme des indices, et on préfère ne rien dire plutôt qu'inventer.
 
-use mse::detect;
-use mse::yamnet::{self, Yamnet};
+use mx_lab::detect;
+use mx_lab::yamnet::{self, Yamnet};
 use std::path::{Path, PathBuf};
 
 /// (classes du modèle, nom affiché). Plusieurs classes peuvent former un même nom.

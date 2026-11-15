@@ -101,7 +101,7 @@ struct Api {
 
 fn extract_dll() -> Result<PathBuf, String> {
     let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-    let folder = base.join("music-sequence-extractor");
+    let folder = base.join("MX-LAB");
     std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
     // La taille compressée distingue les versions embarquées
     let target = folder.join(format!("libmpv-{}.dll", COMPRESSED.len()));
@@ -812,7 +812,7 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         // Source 5.1 : le même sinus dans le central et l'arrière gauche
         let source = folder.join("source.mka");
-        let (log, ok) = mse::ffmpeg::run(&[
+        let (log, ok) = mx_lab::ffmpeg::run(&[
             OsStr::new("-y"),
             OsStr::new("-f"),
             OsStr::new("lavfi"),
@@ -858,7 +858,7 @@ mod tests {
         let folder = std::env::temp_dir().join(format!("music-studio-seek-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let source = folder.join("source.mka");
-        let (log, ok) = mse::ffmpeg::run(&[
+        let (log, ok) = mx_lab::ffmpeg::run(&[
             OsStr::new("-y"),
             OsStr::new("-f"),
             OsStr::new("lavfi"),
@@ -905,7 +905,7 @@ mod tests {
         let tone = |name: &str, amplitude: f64| {
             let source = folder.join(name);
             let expression = format!("aevalsrc={amplitude}*sin(2*PI*440*t)|{amplitude}*sin(2*PI*440*t):d=5:s=48000");
-            let (log, ok) = mse::ffmpeg::run(&[
+            let (log, ok) = mx_lab::ffmpeg::run(&[
                 OsStr::new("-y"),
                 OsStr::new("-f"),
                 OsStr::new("lavfi"),
@@ -935,7 +935,7 @@ mod tests {
         let folder = std::env::temp_dir().join(format!("music-studio-fader-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let source = folder.join("source.wav");
-        let (log, ok) = mse::ffmpeg::run(&[
+        let (log, ok) = mx_lab::ffmpeg::run(&[
             OsStr::new("-y"),
             OsStr::new("-f"),
             OsStr::new("lavfi"),
@@ -964,7 +964,7 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         // Source 5.1 : un sinus dans le central et un autre, différent, dans l'arrière gauche
         let source = folder.join("source.mka");
-        let (log, ok) = mse::ffmpeg::run(&[
+        let (log, ok) = mx_lab::ffmpeg::run(&[
             OsStr::new("-y"),
             OsStr::new("-f"),
             OsStr::new("lavfi"),

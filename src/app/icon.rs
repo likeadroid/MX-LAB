@@ -1,4 +1,4 @@
-// L'icône de Music Studio, dessinée : barres de niveau et tête de lecture rouge.
+// L'icône de MX-LAB, dessinée : barres de niveau et tête de lecture rouge.
 // Incluse aussi par build.rs, pour l'icône de l'exe.
 
 /// Pixels RGBA d'une icône carrée de `size` pixels.

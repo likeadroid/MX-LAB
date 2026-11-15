@@ -21,11 +21,11 @@ fn compress(source: &str, name: &str) {
     encoder.finish().unwrap();
 }
 
-include!("src/bin/music-studio/icon.rs");
+include!("src/app/icon.rs");
 
-/// Écrit l'icône de Music Studio (.ico) et la donne à son exe, sans toucher aux autres.
+/// Écrit l'icône de MX-LAB (.ico) et la donne à son exe, sans toucher aux autres.
 fn studio_icon() {
-    println!("cargo:rerun-if-changed=src/bin/music-studio/icon.rs");
+    println!("cargo:rerun-if-changed=src/app/icon.rs");
     let folder = env::var("OUT_DIR").unwrap();
     let sizes = [16u32, 32, 48, 256];
     let images: Vec<Vec<u8>> = sizes
@@ -63,18 +63,18 @@ fn studio_icon() {
     for image in &images {
         ico.extend_from_slice(image);
     }
-    let ico_path = Path::new(&folder).join("music-studio.ico");
+    let ico_path = Path::new(&folder).join("mx-lab.ico");
     fs::write(&ico_path, ico).unwrap();
-    let rc_path = Path::new(&folder).join("music-studio.rc");
+    let rc_path = Path::new(&folder).join("mx-lab.rc");
     let escaped = ico_path.display().to_string().replace('\\', "\\\\");
     fs::write(&rc_path, format!("1 ICON \"{escaped}\"\n")).unwrap();
-    embed_resource::compile_for(&rc_path, ["music-studio"], embed_resource::NONE).manifest_optional().unwrap();
+    embed_resource::compile_for(&rc_path, ["mx-lab"], embed_resource::NONE).manifest_optional().unwrap();
 }
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     studio_icon();
-    compress("../ffmpeg-min/ffmpeg.exe", "ffmpeg.exe.zst");
+    compress("ffmpeg-min/ffmpeg.exe", "ffmpeg.exe.zst");
     compress("vendor/libmpv/libmpv-2.dll", "libmpv-2.dll.zst");
 }
 

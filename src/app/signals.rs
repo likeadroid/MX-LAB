@@ -2,7 +2,7 @@
 //! BS.1770 pour le mix et pour chaque canal. Vignettes et keyframes de la vidéo.
 //! Tout est mis en cache hors du dossier de la vidéo : c'est recalculable.
 
-use mse::ffmpeg;
+use mx_lab::ffmpeg;
 use rayon::prelude::*;
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use std::ffi::OsStr;
@@ -1123,7 +1123,7 @@ pub fn cache_path(video: &Path, kind: &str) -> Option<PathBuf> {
         hash = (hash ^ byte as u64).wrapping_mul(0x100000001b3);
     }
     let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-    let folder = base.join("music-sequence-extractor").join("studio-cache");
+    let folder = base.join("MX-LAB").join("studio-cache");
     std::fs::create_dir_all(&folder).ok()?;
     Some(folder.join(format!("{hash:016x}.{kind}.zst")))
 }

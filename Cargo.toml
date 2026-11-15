@@ -1,23 +1,15 @@
 [package]
-name = "music-sequence-extractor"
+name = "mx-lab"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "mse"
+name = "mx_lab"
 path = "src/lib.rs"
 
 [[bin]]
-name = "music-sequence-extractor"
-path = "src/main.rs"
-
-[[bin]]
-name = "mse-cli"
-path = "src/bin/mse-cli.rs"
-
-[[bin]]
-name = "music-studio"
-path = "src/bin/music-studio/main.rs"
+name = "mx-lab"
+path = "src/app/main.rs"
 
 [dependencies]
 eframe = { version = "0.37.0", default-features = false, features = ["glow", "wgpu", "default_fonts"] }
