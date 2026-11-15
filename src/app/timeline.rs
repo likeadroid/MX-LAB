@@ -2328,14 +2328,6 @@ pub fn loudness_text(value: f32) -> String {
     }
 }
 
-fn true_peak_exceeds(value: f32, target: LoudnessTarget) -> bool {
-    value > target.true_peak
-}
-
-fn integrated_misses(value: f32, target: LoudnessTarget) -> bool {
-    value > NO_LOUDNESS && (value - target.integrated).abs() > target.tolerance
-}
-
 /// Bleu dans la tolérance, rouge à 1 LU au-delà, avec un fondu entre les deux.
 fn integrated_color(value: f32, target: LoudnessTarget) -> Color32 {
     let excess = ((value - target.integrated).abs() - target.tolerance).clamp(0.0, 1.0);
@@ -2663,14 +2655,6 @@ mod tests {
         assert_eq!(integrated_color(-21.0, target), LOUD_OFF_TARGET);
         let between = integrated_color(-21.5, target);
         assert!(between != LOUD_INTEGRATED && between != LOUD_OFF_TARGET);
-    }
-
-    #[test]
-    fn off_target_values_are_flagged() {
-        let target = LoudnessTarget::default();
-        assert!(true_peak_exceeds(-1.0, target) && !true_peak_exceeds(-2.0, target));
-        assert!(integrated_misses(-20.0, target) && !integrated_misses(-25.0, target));
-        assert!(!integrated_misses(NO_LOUDNESS, target), "rien de mesuré : rien à signaler");
     }
 
     #[test]
