@@ -48,9 +48,13 @@ fn extract() -> io::Result<PathBuf> {
     Ok(target)
 }
 
+/// Le ffmpeg utilisé.
+pub fn path() -> Result<PathBuf, String> {
+    PATH.get_or_init(locate).clone()
+}
+
 fn command() -> Result<Command, String> {
-    let path = PATH.get_or_init(locate);
-    let mut command = Command::new(path.as_ref().map_err(Clone::clone)?);
+    let mut command = Command::new(path()?);
     command.stdin(Stdio::null());
     #[cfg(windows)]
     {

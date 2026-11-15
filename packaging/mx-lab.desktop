@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=MX-LAB
+Comment=Étudier la musique d'un film à l'image
+Exec=mx-lab %F
+Icon=mx-lab
+Categories=AudioVideo;Video;Audio;
+MimeType=video/x-matroska;video/mp4;video/quicktime;video/webm;video/x-msvideo;
+Terminal=false

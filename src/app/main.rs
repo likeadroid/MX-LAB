@@ -8,6 +8,7 @@ mod icon;
 mod monitor;
 mod mpv;
 mod music_tags;
+mod packaging;
 mod project;
 mod recent;
 mod release_name;
@@ -2692,6 +2693,10 @@ impl eframe::App for App {
 
 
 fn main() -> eframe::Result {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(code) = packaging::run(&arguments) {
+        std::process::exit(code);
+    }
     let backend = renderer::RenderBackend::load();
     let options = eframe::NativeOptions {
         renderer: backend.apply(),
