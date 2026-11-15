@@ -26,6 +26,16 @@ dylibbundler -of -b \
   -s "$brew_prefix/lib" < /dev/null
 install_name_tool -id @executable_path/../Frameworks/libmpv.2.dylib "$contents/Frameworks/libmpv.2.dylib"
 
+# dylibbundler peut ajouter deux fois le même LC_RPATH, que dyld refuse : n'en garder qu'un
+for file in "$contents/MacOS/ffmpeg" "$contents"/Frameworks/*.dylib; do
+  otool -l "$file" | awk '/cmd LC_RPATH/ { getline; getline; print $2 }' | sort | uniq -d | while read -r rpath; do
+    count="$(otool -l "$file" | awk '/cmd LC_RPATH/ { getline; getline; print $2 }' | grep -cx "$rpath")"
+    for _ in $(seq 2 "$count"); do
+      install_name_tool -delete_rpath "$rpath" "$file"
+    done
+  done
+done
+
 # Plus aucune référence à Homebrew : l'app doit tourner sans lui
 if otool -L "$contents/MacOS/ffmpeg" "$contents"/Frameworks/*.dylib | grep -E "$brew_prefix|/usr/local/(opt|Cellar)"; then
   echo "Des bibliothèques pointent encore vers Homebrew" >&2
