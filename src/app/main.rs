@@ -381,18 +381,22 @@ fn table_cells(rect: egui::Rect, char_width: f32) -> Vec<(Column, egui::Rect)> {
     cells.extend(LOUDNESS_CELLS.iter().map(|&(column, first, last)| {
         (column, cell(loudness_left + first as f32 * char_width, loudness_left + last as f32 * char_width))
     }));
+    // Le nom d'abord, puis mood, ensemble et instruments, et la note jusqu'aux mesures
     let mut x = base + FIXED_CHARS as f32 * char_width + TABLE_NOTE_GAP;
-    for (column, width) in [
+    let tags = [
         (Column::Mood, TABLE_MOOD_WIDTH),
         (Column::Ensembles, TABLE_ENSEMBLES_WIDTH),
         (Column::Instruments, TABLE_INSTRUMENTS_WIDTH),
-    ] {
+    ];
+    let tags_width: f32 = tags.iter().map(|t| t.1).sum();
+    let (name, note) = text_column_widths(loudness_left - TABLE_NOTE_GAP - x - tags_width);
+    cells.push((Column::Name, cell(x, x + name)));
+    x += name + TABLE_NOTE_GAP;
+    for (column, width) in tags {
         cells.push((column, cell(x, x + width - 6.0)));
         x += width;
     }
-    let (name, note) = text_column_widths(loudness_left - TABLE_NOTE_GAP - x);
-    cells.push((Column::Name, cell(x, x + name)));
-    cells.push((Column::Note, cell(x + name + TABLE_NOTE_GAP, x + name + TABLE_NOTE_GAP + note)));
+    cells.push((Column::Note, cell(x, x + note)));
     cells
 }
 
@@ -439,7 +443,7 @@ fn loudness_columns(measure: Option<&signals::Measure>, overrides: &BTreeMap<Str
     )
 }
 
-/// Les colonnes de texte du tableau, à gauche du nom et de la note.
+/// Les colonnes de texte du tableau, entre le nom et la note.
 const TABLE_MOOD_WIDTH: f32 = 62.0;
 const TABLE_ENSEMBLES_WIDTH: f32 = 112.0;
 const TABLE_INSTRUMENTS_WIDTH: f32 = 150.0;
@@ -530,8 +534,6 @@ fn paint_table_row(
     }
 }
 
-/// Applique une détection sans perdre la séquence choisie : si elle a fusionné avec une
-/// voisine, la sélection passe à celle qui recouvre désormais son milieu.
 /// Détection de la musique, sur son propre fil ; `cancel` l'arrête entre deux lots.
 fn run_detection(path: &Path, track: usize, layout: &str, duration: f64, cancel: Arc<AtomicBool>, send: &(impl Fn(Job) + Clone + Send + Sync + 'static)) {
     let result = guarded(|| {
@@ -552,6 +554,8 @@ fn run_detection(path: &Path, track: usize, layout: &str, duration: f64, cancel:
     send(Job::Detected(result));
 }
 
+/// Applique une détection sans perdre la séquence choisie : si elle a fusionné avec une
+/// voisine, la sélection passe à celle qui recouvre désormais son milieu.
 fn apply_detection_keeping_selection(project: &mut Project, selected: &mut Option<u64>, detected: &[(f64, f64)]) {
     let middle = selected.and_then(|id| project.segment(id)).map(|s| (s.start + s.end) / 2.0);
     project.apply_detection(detected);
@@ -2103,7 +2107,7 @@ impl App {
         let header_loudness = loudness_header("TP", "I", "S", "M", "LRA");
         let (header_rect, header) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), TABLE_ROW_HEIGHT - 2.0), egui::Sense::hover());
-        header.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, format!("{header_columns} Mood Ensemble Instruments Nom Note {header_loudness}")));
+        header.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, format!("{header_columns} Nom Mood Ensemble Instruments Note {header_loudness}")));
         let weak = ui.visuals().weak_text_color();
         let header_tags = music_tags::SequenceTags {
             mood: "Mood".into(),
@@ -3013,7 +3017,7 @@ mod tests {
         let mut harness = harness(app);
         harness.step();
         harness.step();
-        harness.get_by_label_contains("Instruments Nom Note");
+        harness.get_by_label_contains("Nom Mood Ensemble Instruments Note");
         // Le nom d'abord, la note ensuite, sur une seule ligne
         harness.get_by_label_contains("Générique de début Thème de cordes").click();
         harness.step();
@@ -3266,7 +3270,7 @@ mod tests {
         let mut harness = harness(app);
         harness.step();
         harness.step();
-        harness.get_by_label_contains("Instruments Nom Note");
+        harness.get_by_label_contains("Nom Mood Ensemble Instruments Note");
         let row = harness.get_by_label_contains("Thème de cordes reprise au piano");
         // La ligne porte les colonnes et la note, et un clic mène à la séquence
         row.click();
@@ -3731,7 +3735,8 @@ mod tests {
         let wide = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1400.0, 18.0));
         assert_eq!(cell(wide, Column::Range).right(), 1400.0 - TABLE_PADDING);
         assert!(cell(wide, Column::Note).right() <= cell(wide, Column::TruePeak).left());
-        assert!(cell(wide, Column::Instruments).right() <= cell(wide, Column::Name).left());
+        assert!(cell(wide, Column::Name).right() <= cell(wide, Column::Mood).left(), "le nom avant le mood");
+        assert!(cell(wide, Column::Instruments).right() <= cell(wide, Column::Note).left());
         // Panneau étroit : le texte garde sa place, les mesures sortent par la droite
         let narrow = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(620.0, 18.0));
         assert!(cell(narrow, Column::Range).right() > 620.0);
@@ -4127,7 +4132,7 @@ mod tests {
         let window = harness.ctx.content_rect();
         let play = harness.get_by_label("Lecture / pause (Espace)").rect();
         let next = harness.get_by_label("Séquence suivante (flèche bas)").rect();
-        let list = harness.get_by_label_contains("Instruments Nom Note").rect();
+        let list = harness.get_by_label_contains("Nom Mood Ensemble Instruments Note").rect();
         assert!(next.right() < list.left(), "{next:?} {list:?}");
         assert!(window.contains_rect(play));
     }
