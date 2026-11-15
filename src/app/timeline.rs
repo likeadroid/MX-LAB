@@ -2249,18 +2249,21 @@ fn switch_row(ui: &mut egui::Ui, rect: Rect, label: &str, on: bool, help: &str) 
     let painter = ui.painter();
     let color = if enabled { NAME } else { WEAK };
     painter.text(Pos2::new(rect.left(), rect.center().y), Align2::LEFT_CENTER, label, FontId::proportional(FONT_SIZE), color);
-    let track = Rect::from_center_size(Pos2::new(rect.right() - 12.0, rect.center().y), egui::vec2(24.0, 14.0));
+    // Un rail deux fois plus large que haut, et un bouton carré de toute sa hauteur, coins arrondis
+    const HEIGHT: f32 = 14.0;
+    const RADIUS: f32 = 3.0;
+    let track = Rect::from_min_size(Pos2::new(rect.right() - 2.0 * HEIGHT, rect.center().y - HEIGHT / 2.0), egui::vec2(2.0 * HEIGHT, HEIGHT));
     let hovered = response.hovered();
-    let track_color = match (on, hovered) {
-        (true, false) => Color32::from_rgb(78, 80, 87),
-        (true, true) => Color32::from_rgb(92, 94, 101),
-        (false, false) => Color32::from_rgb(42, 44, 49),
-        (false, true) => Color32::from_rgb(54, 56, 62),
+    let track_color = if hovered { Color32::from_gray(72) } else { Color32::from_gray(60) };
+    painter.rect_filled(track, RADIUS, track_color);
+    let knob_left = if on { track.right() - HEIGHT } else { track.left() };
+    let knob = Rect::from_min_size(Pos2::new(knob_left, track.top()), egui::vec2(HEIGHT, HEIGHT));
+    let knob_color = match (on, enabled) {
+        (true, true) => Color32::WHITE,
+        (false, true) => Color32::from_gray(150),
+        (_, false) => Color32::from_gray(95),
     };
-    painter.rect_filled(track, 7.0, track_color);
-    let knob_x = if on { track.right() - 7.0 } else { track.left() + 7.0 };
-    let knob = Rect::from_center_size(Pos2::new(knob_x, track.center().y), egui::vec2(10.0, 10.0));
-    painter.rect_filled(knob, 3.0, if on { Color32::WHITE } else { Color32::from_gray(135) });
+    painter.rect_filled(knob, RADIUS, knob_color);
     response
 }
 
